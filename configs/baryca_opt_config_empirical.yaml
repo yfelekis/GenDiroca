@@ -1,0 +1,5 @@
+max_iter: 5000
+tol: 0.0001
+seed: 23
+
+k_folds: 5

@@ -1,0 +1,28 @@
+# caches & OS junk
+__pycache__/
+*.pyc
+.DS_Store
+.ipynb_checkpoints/
+*.log
+*.synctex.gz
+
+# big/generated stuff (won't be committed)
+DiRoCA_ext_clean/
+checkpoints/
+data/
+datasets/
+outputs/
+plots/*.gif
+plots/*.png
+batteries/
+batteries/dfs/
+
+# common large binaries
+*.pt
+*.pth
+*.pkl
+*.npz
+*.zip
+*.tar
+*.onnx
+git-history-backup.tgz

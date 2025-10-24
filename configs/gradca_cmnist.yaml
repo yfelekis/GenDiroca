@@ -1,0 +1,25 @@
+# GradCA Configuration for ColorMNIST
+# GradCA: Gradient-based Causal Abstraction (non-robust)
+
+# Optimization parameters
+optimization:
+  eta_min: 1e-4      # Learning rate for T matrix
+  eta_max: 1e-3      # Learning rate (not used in non-robust)
+  num_steps_min: 1   # Steps for T optimization
+  num_steps_max: 1   # Steps (not used in non-robust)
+  max_iter: 3        # Maximum iterations
+  tol: 1e-5          # Convergence tolerance
+  seed: 42           # Random seed
+  robust_L: false    # Disable robust low-level
+  robust_H: false    # Disable robust high-level
+  initialization: 'zeros'  # Initialization method
+  experiment: 'cmnist'     # Experiment name
+  gain: 0.0          # Xavier initialization gain
+  optimizers: 'adam' # Optimizer type
+
+# Method-specific parameters
+method:
+  name: 'gradca'
+  description: 'Gradient-based Causal Abstraction'
+  robust: false
+  adversarial: false

@@ -1,0 +1,106 @@
+# Battery Data Generation Configuration
+# This config file defines all parameters for battery data generation
+
+# Basic experiment settings
+model_type: 'affine_anm'  # Affine ANM with intercepts
+experiment_name: 'battery'
+seed: 23
+
+# Data source paths
+data_paths:
+  ll_scm: 'batteries/scms/M_WMG_bins_5_avg_2.pkl'
+  hl_scm: 'batteries/scms/M_LRCS_bins_5.pkl'
+  ll_data: 'batteries/dfs/df_WMG_bins_5_avg_2.pkl'
+  hl_data: 'batteries/dfs/df_LRCS_bins_5.pkl'
+
+# Variable definitions
+variables:
+  low_level:
+    nodes: ['CG', 'ML0', 'ML1']
+    # CG = Comma Gap, ML0/ML1 = Mass Loading (two measurements)
+  high_level:
+    nodes: ['CG', 'ML']
+    # CG = Comma Gap, ML = Mass Loading (single measurement)
+
+# Data preprocessing settings
+preprocessing:
+  # Column renaming for consistency
+  ll_rename:
+    'ML_avg0': 'ML0'
+    'ML_avg1': 'ML1'
+  hl_rename:
+    'Comma gap (µm)': 'CG'
+    'Mass Loading (mg cm-2)': 'ML'
+
+# SCM abduction settings
+abduction:
+  use_intercept: true  # Include intercepts in SCM abduction
+  fit_method: 'linear_regression'  # Method for fitting coefficients
+  # R² threshold for model quality (optional)
+  r2_threshold: 0.5
+
+# Bootstrap augmentation settings
+bootstrap:
+  enabled: true
+  min_samples: 10  # Minimum samples per intervention
+  # Only bootstrap if original samples < min_samples
+  preserve_large_samples: true
+
+# Intervention definitions
+interventions:
+  low_level:
+    # CG values for LL interventions
+    cg_values: [75.0, 110.0, 180.0, 200.0]
+    # Intervention names (auto-generated as Intervention({'CG': value}))
+  
+  high_level:
+    # CG values for HL interventions  
+    cg_values: [75.0, 100.0, 200.0]
+    # Intervention names (auto-generated as Intervention({'CG': value}))
+
+# Data alignment settings
+alignment:
+  # Align LL and HL data by CG values
+  method: 'cg_based'
+  tolerance: 1e-9  # Tolerance for CG value matching
+
+# Output settings
+output:
+  save_directory: 'data/battery'
+  save_models: true
+  save_abstraction: true
+  # File names
+  ll_model_file: 'LLmodel.pkl'
+  hl_model_file: 'HLmodel.pkl'
+  abstraction_file: 'abstraction_data.pkl'
+
+# Model packaging settings
+model_packaging:
+  # Include in LL/HL models
+  include_deterministic: true  # Include deterministic parts D
+  include_noise: true         # Include abduced noise U
+  include_coefficients: true  # Include SCM coefficients
+  include_intercepts: true   # Include intercepts
+  
+  # Noise keys for optimization compatibility
+  noise_keys:
+    ll: 'U_ll_hat'
+    hl: 'U_hl_hat'
+
+# Quality control settings
+quality_control:
+  # Print sample sizes per intervention
+  print_sample_sizes: true
+  # Print R² scores for SCM abduction
+  print_r2_scores: true
+  # Validate data consistency
+  validate_consistency: true
+
+# Advanced settings
+advanced:
+  # Handle missing data
+  handle_missing: true
+  # Use parquet files if available (faster loading)
+  prefer_parquet: true
+  # Data type for arrays
+  array_dtype: 'float32'

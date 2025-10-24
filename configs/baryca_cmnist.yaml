@@ -1,0 +1,17 @@
+# BaryCA Configuration for ColorMNIST
+# BaryCA: Barycentric Causal Abstraction
+
+# BaryCA-specific parameters
+baryca:
+  max_iter: 1000     # Maximum iterations
+  tol: 1e-5          # Convergence tolerance
+  lr: 1e-3           # Learning rate
+  seed: 42           # Random seed
+
+# Method-specific parameters
+method:
+  name: 'baryca'
+  description: 'Barycentric Causal Abstraction'
+  robust: false
+  adversarial: false
+  structural: true   # Uses structural matrices

@@ -1,0 +1,43 @@
+# DiRoCA Configuration for ColorMNIST
+# DiRoCA: Differentiable Robust Causal Abstraction
+
+# Empirical radius computation parameters
+empirical_radius:
+  eta: 0.05          # Confidence level
+  c1: 1000.0         # First constant
+  c2: 1.0             # Second constant  
+  alpha: 2.0          # Exponent
+  m: 1               # Dimension multiplier
+
+# Radius pairs to test (epsilon, delta)
+# epsilon: low-level noise bound
+# delta: high-level noise bound
+radius_pairs:
+  - [0.1, 0.1]       # Very small bounds
+  - [0.5, 0.5]       # Small bounds
+  - [1.0, 1.0]       # Medium bounds
+  - [2.0, 2.0]       # Large bounds
+  - [4.0, 4.0]       # Very large bounds
+
+# Optimization parameters
+optimization:
+  eta_min: 1e-4      # Learning rate for T matrix
+  eta_max: 1e-3      # Learning rate for adversarial variables
+  num_steps_min: 1   # Steps for T optimization
+  num_steps_max: 1   # Steps for adversarial optimization
+  max_iter: 3        # Maximum iterations
+  tol: 1e-5          # Convergence tolerance
+  seed: 42           # Random seed
+  robust_L: true     # Enable robust low-level
+  robust_H: true     # Enable robust high-level
+  initialization: 'zeros'  # Initialization method
+  experiment: 'cmnist'     # Experiment name
+  gain: 0.0          # Xavier initialization gain
+  optimizers: 'adam' # Optimizer type
+
+# Method-specific parameters
+method:
+  name: 'diroca'
+  description: 'Differentiable Robust Causal Abstraction'
+  robust: true
+  adversarial: true

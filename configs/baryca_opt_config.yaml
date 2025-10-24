@@ -1,0 +1,6 @@
+initialization: 'avg'
+max_iter: 3000
+tol: 0.0001
+
+k_folds: 5
+seed: 23 

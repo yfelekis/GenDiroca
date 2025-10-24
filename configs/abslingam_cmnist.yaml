@@ -1,0 +1,16 @@
+# Abs-LiNGAM Configuration for ColorMNIST
+# Abs-LiNGAM: Abstract LiNGAM for causal abstraction
+
+# Abs-LiNGAM-specific parameters
+abslingam:
+  alpha: 0.1         # Ridge regularization parameter
+  perfect_fit: true   # Include perfect fit case
+  noisy_fit: true    # Include noisy fit case
+
+# Method-specific parameters
+method:
+  name: 'abslingam'
+  description: 'Abstract LiNGAM for Causal Abstraction'
+  robust: false
+  adversarial: false
+  linear: true       # Uses linear regression
