@@ -1,22 +1,23 @@
-# Epsilon and Delta are required, so we set them to 0 for the non-robust case
-epsilon: 0.0
-delta: 0.0
+# GradCA Optimization Configuration for Battery Data
+method: "gradca"
+description: "GradCA (non-robust baseline with Θ=Φ=0)"
 
 # Optimization parameters
-eta_max: 0.001
-eta_min: 0.0001
-max_iter: 7400
-num_steps_min: 1
-num_steps_max: 1
-tol: 0.00001
+optimization:
+  eta_min: 0.001         # Learning rate for T matrix
+  num_steps_min: 1       # Steps per T update
+  max_iter: 5000         # Maximum iterations
+  tol: 0.0001            # Convergence tolerance
+  initialization: "zeros"  # "zeros" or "random"
+  gain: 0.0              # Xavier initialization gain (0.0 = no Xavier)
+  optimizers: "adam"     # "adam" or "adam_betas"
 
-k_folds: 5
+# Cross-validation
+cv:
+  test_size: 0.1
+  seeds: [42, 43, 44, 45, 46]
 
-seed: 23 
-gain: 0.1
-optimizers: 'adam'
-initialization: 'zeros'
-
-# Method flags 
-robust_L: false 
-robust_H: false
+# Output
+output:
+  save_directory: "data/battery/results_empirical_9010"
+  filename_prefix: "gradca_cv_results_empirical"

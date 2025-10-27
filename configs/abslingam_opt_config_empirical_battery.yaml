@@ -1,0 +1,19 @@
+# Abs-LiNGAM Optimization Configuration for Battery Data
+method: "abslingam"
+description: "Abs-LiNGAM baseline with Perfect and Noisy styles"
+
+# Optimization parameters
+optimization:
+  tau_threshold: 0.01     # Threshold for filtering small values in perfect abstraction
+  tau_threshold_noisy: 0.1  # Threshold for noisy abstraction
+  refit_coeff: false     # Whether to refit coefficients in noisy abstraction
+
+# Cross-validation
+cv:
+  test_size: 0.1
+  seeds: [42, 43, 44, 45, 46]
+
+# Output
+output:
+  save_directory: "data/battery/results_empirical_9010"
+  filename_prefix: "abslingam_cv_results_empirical"

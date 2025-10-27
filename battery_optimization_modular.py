@@ -3,6 +3,7 @@ import argparse
 import os
 import sys
 import logging
+import yaml
 from typing import Dict, Any, List, Tuple
 
 import joblib
@@ -19,7 +20,44 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)]
 )
-logger = logging.getLogger("battery_erica_affine_global")
+logger = logging.getLogger("battery_modular_optimization")
+
+
+# ----------------- Config Loading -----------------
+def load_method_config(method: str, experiment: str = "battery") -> Dict[str, Any]:
+    """Load configuration for a specific method."""
+    config_path = f"configs/{method}_opt_config_empirical_{experiment}.yaml"
+    
+    if not os.path.exists(config_path):
+        raise FileNotFoundError(f"Config file not found: {config_path}")
+    
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+    
+    # Ensure numeric values are properly typed
+    config = _ensure_numeric_types(config)
+    
+    logger.info(f"Loaded config for {method}: {config_path}")
+    return config
+
+
+def _ensure_numeric_types(obj):
+    """Recursively ensure numeric values in config are proper types."""
+    if isinstance(obj, dict):
+        return {k: _ensure_numeric_types(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [_ensure_numeric_types(item) for item in obj]
+    elif isinstance(obj, str):
+        # Try to convert string numbers to float/int
+        try:
+            if '.' in obj or 'e' in obj.lower():
+                return float(obj)
+            else:
+                return int(obj)
+        except ValueError:
+            return obj
+    else:
+        return obj
 
 
 # ----------------- Splits -----------------
@@ -244,6 +282,324 @@ def affine_empirical_objective_global(
     return sum(losses) / len(losses)
 
 
+# ----------------- Method Implementations -----------------
+def run_diroca(all_data: Dict[str, Any], config: Dict[str, Any], saved_folds: List[dict]) -> Dict[str, Any]:
+    """Run DiRoCA optimization with config-driven parameters."""
+    opt_config = config["optimization"]
+    radius_config = config["radius_sweep"]
+    output_config = config["output"]
+    
+    # Build radius pairs
+    radius_pairs = []
+    
+    if radius_config.get("use_theoretical_bounds", True):
+        # Compute theoretical bounds
+        l = next(iter(all_data["LLmodel"]["deterministic"].values())).shape[1]
+        h = next(iter(all_data["HLmodel"]["deterministic"].values())).shape[1]
+        train_n = len(saved_folds[0]["train"])
+        
+        theoretical_params = radius_config.get("theoretical_params", {})
+        ll_bound = round(ut.compute_empirical_radius(
+            N=train_n, 
+            eta=theoretical_params.get("eta", 0.05),
+            c1=theoretical_params.get("c1", 1000.0),
+            c2=theoretical_params.get("c2", 1.0),
+            alpha=theoretical_params.get("alpha", 2.0),
+            m=l
+        ), 3)
+        hl_bound = round(ut.compute_empirical_radius(
+            N=train_n,
+            eta=theoretical_params.get("eta", 0.05),
+            c1=theoretical_params.get("c1", 1000.0),
+            c2=theoretical_params.get("c2", 1.0),
+            alpha=theoretical_params.get("alpha", 2.0),
+            m=h
+        ), 3)
+        
+        radius_pairs.append((ll_bound, hl_bound))
+        logger.info(f"Theoretical bounds: ε={ll_bound}, δ={hl_bound}")
+    
+    # Add additional radius pairs
+    for pair in radius_config.get("additional_pairs", []):
+        radius_pairs.append(tuple(pair))
+    
+    logger.info(f"DiRoCA radius sweep: {radius_pairs}")
+    
+    # Run optimization
+    all_runs = {}
+    for (eps, delt) in radius_pairs:
+        logger.info(f"Running DiRoCA (global adversary) for ε={eps}, δ={delt}")
+        res = run_one_erica_affine_global(
+            all_data, saved_folds,
+            epsilon=eps, delta=delt,
+            eta_min=opt_config["eta_min"],
+            eta_max=opt_config["eta_max"],
+            num_steps_min=opt_config["num_steps_min"],
+            num_steps_max=opt_config["num_steps_max"],
+            max_iter=opt_config["max_iter"],
+            tol=opt_config["tol"],
+            seed=saved_folds[0].get("seed", 23),
+            initialization=opt_config["initialization"],
+            gain=opt_config["gain"],
+            optimizers=opt_config["optimizers"]
+        )
+        key = f"epsilon_{eps}_delta_{delt}"
+        all_runs[key] = res
+
+    # Save results
+    os.makedirs(output_config["save_directory"], exist_ok=True)
+    output_path = os.path.join(output_config["save_directory"], f"{output_config['filename_prefix']}.pkl")
+    joblib.dump(all_runs, output_path)
+    logger.info(f"Saved DiRoCA sweep to {output_path}")
+    return all_runs
+
+
+def run_gradca(all_data: Dict[str, Any], config: Dict[str, Any], saved_folds: List[dict]) -> Dict[str, Any]:
+    """Run GradCA optimization with config-driven parameters."""
+    opt_config = config["optimization"]
+    output_config = config["output"]
+    
+    torch.manual_seed(23)
+    np.random.seed(23)
+
+    det_ll_all = all_data["LLmodel"]["deterministic"]
+    det_hl_all = all_data["HLmodel"]["deterministic"]
+    noise_ll_all = all_data["LLmodel"]["noise"]
+    noise_hl_all = all_data["HLmodel"]["noise"]
+    row_idx_ll = all_data["LLmodel"]["row_idx"]
+    row_idx_hl = all_data["HLmodel"]["row_idx"]
+    omega = all_data["abstraction_data"]["omega"]
+
+    d_l = next(iter(det_ll_all.values())).shape[1]
+    d_h = next(iter(det_hl_all.values())).shape[1]
+
+    results = {}
+
+    for fold_id, fold in enumerate(saved_folds):
+        (det_ll_t, det_hl_t, noise_ll_t, noise_hl_t,
+         slice_map_ll, slice_map_hl, tot_n_ll, tot_n_hl) = build_fold_aligned_buckets(
+            det_ll=det_ll_all, det_hl=det_hl_all,
+            noise_ll=noise_ll_all, noise_hl=noise_hl_all,
+            row_idx_ll=row_idx_ll, row_idx_hl=row_idx_hl,
+            omega=omega, train_idx=fold["train"]
+        )
+
+        # fixed zero perturbations (global)
+        Theta_L0 = torch.zeros((tot_n_ll, d_l))
+        Phi_H0   = torch.zeros((tot_n_hl, d_h))
+
+        seed_fold = int(fold.get("seed", 23))
+        torch.manual_seed(seed_fold)
+        np.random.seed(seed_fold)
+
+        T = torch.randn(d_h, d_l, requires_grad=True)
+        if opt_config["gain"] > 0:
+            init.xavier_normal_(T, gain=opt_config["gain"])
+
+        if opt_config["optimizers"] == "adam":
+            optimizer_T = torch.optim.Adam([T], lr=opt_config["eta_min"])
+        elif opt_config["optimizers"] == "adam_betas":
+            optimizer_T = torch.optim.Adam([T], lr=opt_config["eta_min"], betas=(0.9, 0.999), eps=1e-8, amsgrad=True)
+        else:
+            raise ValueError(f"Unknown optimizer: {opt_config['optimizers']}")
+
+        prev_obj = float("inf")
+        for it in tqdm(range(opt_config["max_iter"]), desc=f"GRADCA | Fold {fold_id+1}/{len(saved_folds)}"):
+            for _ in range(opt_config["num_steps_min"]):
+                optimizer_T.zero_grad()
+                obj_T = affine_empirical_objective_global(
+                    det_ll_t, det_hl_t, noise_ll_t, noise_hl_t,
+                    omega, T, Theta_L0, Phi_H0, slice_map_ll, slice_map_hl
+                )
+                obj_T.backward()
+                optimizer_T.step()
+
+            with torch.no_grad():
+                cur = obj_T.item()
+                if abs(prev_obj - cur) < opt_config["tol"]:
+                    break
+                prev_obj = cur
+
+        results[f"fold_{fold_id}"] = {
+            "seed": seed_fold,
+            "T": T.detach().cpu().numpy(),
+            "train_N": tot_n_ll,
+            "test_N": len(fold["test"]),
+        }
+
+    # Save results
+    os.makedirs(output_config["save_directory"], exist_ok=True)
+    output_path = os.path.join(output_config["save_directory"], f"{output_config['filename_prefix']}.pkl")
+    joblib.dump(results, output_path)
+    logger.info(f"GradCA results saved to {output_path}")
+    return results
+
+
+def run_baryca(all_data: Dict[str, Any], config: Dict[str, Any], saved_folds: List[dict]) -> Dict[str, Any]:
+    """Run BaryCA optimization with config-driven parameters."""
+    opt_config = config["optimization"]
+    output_config = config["output"]
+    
+    det_ll = all_data["LLmodel"].get("deterministic", {})
+    det_hl = all_data["HLmodel"].get("deterministic", {})
+    noise_ll_all = all_data["LLmodel"].get("noise", {})
+    noise_hl_all = all_data["HLmodel"].get("noise", {})
+    row_idx_ll = all_data["LLmodel"]["row_idx"]
+    row_idx_hl = all_data["HLmodel"]["row_idx"]
+    omega = all_data["abstraction_data"]["omega"]
+
+    # pooled noises (for quick dim checks)
+    d_l = next(iter(det_ll.values())).shape[1]
+    d_h = next(iter(det_hl.values())).shape[1]
+
+    # Estimate per-intervention mixing with bias, then average
+    def fit_with_bias(U: np.ndarray, D: np.ndarray) -> np.ndarray:
+        U_aug = np.concatenate([U, np.ones((U.shape[0], 1))], axis=1)  # (N, d+1)
+        # D^T ≈ A @ U_aug^T  => A ∈ R^{d × (d+1)}
+        return D.T @ np.linalg.pinv(U_aug.T)
+
+    A_L_list, A_H_list = [], []
+    min_samples = opt_config.get("min_samples_per_intervention", 1)
+    
+    for iota, Dl in det_ll.items():
+        if not _is_bucket_key(iota): continue
+        Ul = noise_ll_all.get(iota, None)
+        if Ul is None or len(Ul) < min_samples or len(Dl) < min_samples: continue
+        try:
+            A_i = fit_with_bias(Ul, Dl)
+            if A_i.shape == (d_l, d_l + 1):
+                A_L_list.append(A_i)
+        except np.linalg.LinAlgError:
+            pass
+
+    for eta, Dh in det_hl.items():
+        if not _is_bucket_key(eta): continue
+        Uh = noise_hl_all.get(eta, None)
+        if Uh is None or len(Uh) < min_samples or len(Dh) < min_samples: continue
+        try:
+            A_i = fit_with_bias(Uh, Dh)
+            if A_i.shape == (d_h, d_h + 1):
+                A_H_list.append(A_i)
+        except np.linalg.LinAlgError:
+            pass
+
+    if not A_L_list or not A_H_list:
+        logger.warning("[BaryCA] Not enough per-intervention fits; falling back to identity+zero bias.")
+        W_L_bary, b_L_bary = np.eye(d_l), np.zeros((d_l, 1))
+        W_H_bary, b_H_bary = np.eye(d_h), np.zeros((d_h, 1))
+    else:
+        A_L_bary = np.mean(np.stack(A_L_list, 0), axis=0)  # (d_l, d_l+1)
+        A_H_bary = np.mean(np.stack(A_H_list, 0), axis=0)  # (d_h, d_h+1)
+        W_L_bary, b_L_bary = A_L_bary[:, :d_l], A_L_bary[:, d_l:d_l+1]
+        W_H_bary, b_H_bary = A_H_bary[:, :d_h], A_H_bary[:, d_h:d_h+1]
+
+    results = {}
+    regularization = opt_config.get("regularization", 1e-8)
+    
+    for k, fold in enumerate(saved_folds):
+        # Reuse aligned build to get TRAIN-aligned U's (order matters)
+        (det_ll_t, det_hl_t, noise_ll_t, noise_hl_t,
+         slice_map_ll, slice_map_hl, tot_n_ll, _) = build_fold_aligned_buckets(
+            det_ll=det_ll, det_hl=det_hl,
+            noise_ll=noise_ll_all, noise_hl=noise_hl_all,
+            row_idx_ll=row_idx_ll, row_idx_hl=row_idx_hl,
+            omega=omega, train_idx=fold["train"]
+        )
+
+        # Build barycentric X from aligned U's (preserving per-pair alignment)
+        X_L_list, X_H_list = [], []
+        for iota, Ul_t in noise_ll_t.items():
+            eta = omega.get(iota, None)
+            if eta is None: continue
+            Uh_t = noise_hl_t.get(iota, None)  # read HL by iota to match new keying
+            if Uh_t is None: continue
+
+            # Convert tensors to numpy before LS math
+            Ul_np = Ul_t.detach().cpu().numpy()
+            Uh_np = Uh_t.detach().cpu().numpy()
+
+            # shapes: W_* (d_*, d_*), b_* (d_*,1), U_*^T (d_*, n)
+            Xl = (W_L_bary @ Ul_np.T + b_L_bary)     # (d_l, n)
+            Xh = (W_H_bary @ Uh_np.T + b_H_bary)     # (d_h, n)
+            X_L_list.append(Xl)
+            X_H_list.append(Xh)
+
+        if not X_L_list or not X_H_list:
+            logger.warning(f"[BaryCA] Fold {k}: no aligned train samples; returning zeros.")
+            Tmat = np.zeros((d_h, d_l))
+        else:
+            X_L_bary = np.concatenate(X_L_list, axis=1)  # (d_l, N_train_aligned)
+            X_H_bary = np.concatenate(X_H_list, axis=1)  # (d_h, N_train_aligned)
+            try:
+                # Add regularization for numerical stability
+                X_L_reg = X_L_bary + regularization * np.eye(X_L_bary.shape[0])
+                Tmat = (X_H_bary @ np.linalg.pinv(X_L_reg)).astype(np.float64)
+            except np.linalg.LinAlgError:
+                logger.warning(f"[BaryCA] pinv failed on fold {k}; using zeros.")
+                Tmat = np.zeros((d_h, d_l))
+
+        results[f"fold_{k}"] = {
+            "seed": int(fold.get("seed", 0)),
+            "T": Tmat,
+            "train_N": tot_n_ll,
+            "test_N": len(fold["test"]),
+        }
+        logger.info(f"[BaryCA] Fold {k+1}/{len(saved_folds)} done "
+                    f"(train_N={tot_n_ll}, test_N={len(fold['test'])}).")
+
+    # Save results
+    os.makedirs(output_config["save_directory"], exist_ok=True)
+    output_path = os.path.join(output_config["save_directory"], f"{output_config['filename_prefix']}.pkl")
+    joblib.dump(results, output_path)
+    logger.info(f"BaryCA results saved to {output_path}")
+    return results
+
+
+def run_abslingam(all_data: Dict[str, Any], config: Dict[str, Any], saved_folds: List[dict]) -> Dict[str, Any]:
+    """Run Abs-LiNGAM optimization with config-driven parameters."""
+    opt_config = config["optimization"]
+    output_config = config["output"]
+    
+    logger.info("Running Abs-LiNGAM baseline (per-fold, train-split)…")
+
+    Dll_obs = all_data["LLmodel"]["data"][None]  # (N, d_l)
+    Dhl_obs = all_data["HLmodel"]["data"][None]  # (N, d_h)
+
+    results = {}
+    for k, fold in enumerate(saved_folds):
+        train_idx = fold["train"]
+        Dll_train = Dll_obs[train_idx]
+        Dhl_train = Dhl_obs[train_idx]
+
+        fold_results = {}
+        for style in ["Perfect", "Noisy"]:
+            tau_threshold = opt_config.get("tau_threshold", 1e-2) if style == "Perfect" else opt_config.get("tau_threshold_noisy", 1e-1)
+            refit_coeff = opt_config.get("refit_coeff", False)
+            
+            T_matrix, error = optools.abs_lingam_reconstruction_v2(
+                Dll_train, Dhl_train,
+                n_paired_samples=min(len(Dll_train), len(Dhl_train)),
+                style=style, tau_threshold=tau_threshold
+            )
+            fold_results[style] = {
+                "T": T_matrix,
+                "error": error,
+                "train_N": len(train_idx),
+                "test_N": len(fold["test"]),
+            }
+
+        results[f"fold_{k}"] = fold_results
+        logger.info(f"[Abs-LiNGAM] Fold {k+1}/{len(saved_folds)} done "
+                    f"(train_N={len(train_idx)}, test_N={len(fold['test'])}).")
+
+    # Save results
+    os.makedirs(output_config["save_directory"], exist_ok=True)
+    output_path = os.path.join(output_config["save_directory"], f"{output_config['filename_prefix']}.pkl")
+    joblib.dump(results, output_path)
+    logger.info(f"Abs-LiNGAM results saved to {output_path}")
+    return results
+
+
 # ----------------- Core optimizer (global adversary) -----------------
 def run_one_erica_affine_global(
     all_data: Dict[str, Any],
@@ -381,346 +737,65 @@ def run_one_erica_affine_global(
     return results
 
 
-# ----------------- Sweeps -----------------
-def run_diroca_radius_sweep(
-    all_data: Dict[str, Any],
-    saved_folds: List[dict],
-    radius_pairs: List[tuple],
-    outdir: str
-) -> Dict[str, Any]:
-    os.makedirs(outdir, exist_ok=True)
-    all_runs = {}
-    for (eps, delt) in radius_pairs:
-        logger.info(f"Running DiRoCA (global adversary) for ε={eps}, δ={delt}")
-        res = run_one_erica_affine_global(
-            all_data, saved_folds,
-            epsilon=eps, delta=delt,
-            eta_min=1e-3, eta_max=1e-3,
-            num_steps_min=5, num_steps_max=2,
-            max_iter=5000, tol=1e-4,
-            seed=saved_folds[0].get("seed", 23),
-            initialization="zeros", gain=0.0, optimizers="adam"
-        )
-        key = f"epsilon_{eps}_delta_{delt}"
-        all_runs[key] = res
-
-    joblib.dump(all_runs, os.path.join(outdir, "diroca_cv_results_empirical.pkl"))
-    logger.info(f"Saved DiRoCA sweep to {outdir}")
-    return all_runs
-
-
-# ----------------- Non-robust GRADCA (Θ=Φ=0) -----------------
-def run_gradca_affine(
-    all_data: Dict[str, Any],
-    saved_folds: List[dict],
-    outdir: str,
-    eta_min: float = 1e-3,
-    num_steps_min: int = 1,
-    max_iter: int = 5000,
-    tol: float = 1e-4,
-    seed: int = 23,
-    initialization: str = "zeros",
-    gain: float = 0.0,
-    optimizers: str = "adam",
-) -> Dict[str, Any]:
-
-    torch.manual_seed(seed); np.random.seed(seed)
-
-    det_ll_all = all_data["LLmodel"]["deterministic"]
-    det_hl_all = all_data["HLmodel"]["deterministic"]
-    noise_ll_all = all_data["LLmodel"]["noise"]
-    noise_hl_all = all_data["HLmodel"]["noise"]
-    row_idx_ll = all_data["LLmodel"]["row_idx"]
-    row_idx_hl = all_data["HLmodel"]["row_idx"]
-    omega = all_data["abstraction_data"]["omega"]
-
-    d_l = next(iter(det_ll_all.values())).shape[1]
-    d_h = next(iter(det_hl_all.values())).shape[1]
-
-    results = {}
-
-    for fold_id, fold in enumerate(saved_folds):
-        (det_ll_t, det_hl_t, noise_ll_t, noise_hl_t,
-         slice_map_ll, slice_map_hl, tot_n_ll, tot_n_hl) = build_fold_aligned_buckets(
-            det_ll=det_ll_all, det_hl=det_hl_all,
-            noise_ll=noise_ll_all, noise_hl=noise_hl_all,
-            row_idx_ll=row_idx_ll, row_idx_hl=row_idx_hl,
-            omega=omega, train_idx=fold["train"]
-        )
-
-        # fixed zero perturbations (global)
-        Theta_L0 = torch.zeros((tot_n_ll, d_l))
-        Phi_H0   = torch.zeros((tot_n_hl, d_h))
-
-        seed_fold = int(fold.get("seed", seed))
-        torch.manual_seed(seed_fold); np.random.seed(seed_fold)
-
-        T = torch.randn(d_h, d_l, requires_grad=True)
-        if gain > 0:
-            init.xavier_normal_(T, gain=gain)
-
-        if optimizers == "adam":
-            optimizer_T = torch.optim.Adam([T], lr=eta_min)
-        elif optimizers == "adam_betas":
-            optimizer_T = torch.optim.Adam([T], lr=eta_min, betas=(0.9, 0.999), eps=1e-8, amsgrad=True)
-        else:
-            raise ValueError(f"Unknown optimizer: {optimizers}")
-
-        prev_obj = float("inf")
-        for it in tqdm(range(max_iter), desc=f"GRADCA | Fold {fold_id+1}/{len(saved_folds)}"):
-            for _ in range(num_steps_min):
-                optimizer_T.zero_grad()
-                obj_T = affine_empirical_objective_global(
-                    det_ll_t, det_hl_t, noise_ll_t, noise_hl_t,
-                    omega, T, Theta_L0, Phi_H0, slice_map_ll, slice_map_hl
-                )
-                obj_T.backward()
-                optimizer_T.step()
-
-            with torch.no_grad():
-                cur = obj_T.item()
-                if abs(prev_obj - cur) < tol:
-                    break
-                prev_obj = cur
-
-        results[f"fold_{fold_id}"] = {
-            "seed": seed_fold,
-            "T": T.detach().cpu().numpy(),
-            "train_N": tot_n_ll,
-            "test_N": len(fold["test"]),
-        }
-
-    os.makedirs(outdir, exist_ok=True)
-    joblib.dump(results, os.path.join(outdir, "gradca_cv_results_empirical.pkl"))
-    logger.info(f"GRADCA results saved to {outdir}")
-    return results
-
-
-# ----------------- BARYCA (empirical) with affine intercept -----------------
-def run_baryca_empirical(all_data: Dict[str, Any], saved_folds: List[dict], outdir: str):
-    """
-    BARYCA (empirical) per-fold:
-      1) Estimate per-intervention mixing with LS **with intercept**:
-            D_i^T ≈ A_i @ [U_i^T; 1^T]  => A_i ∈ R^{d × (d+1)}
-         average them to A_bary, split to (W, b).
-      2) For each fold (train split), form barycentric endogenous:
-            X_L^bary = W_L @ U_ll_train.T + b_L[:,None]
-            X_H^bary = W_H @ U_hl_train.T + b_H[:,None]
-         then fit T by LS: T = X_H^bary @ pinv(X_L^bary).
-    Requires: 'row_idx' dicts for proper train slicing and alignment.
-    """
-    det_ll = all_data["LLmodel"].get("deterministic", {})
-    det_hl = all_data["HLmodel"].get("deterministic", {})
-    noise_ll_all = all_data["LLmodel"].get("noise", {})
-    noise_hl_all = all_data["HLmodel"].get("noise", {})
-    row_idx_ll = all_data["LLmodel"]["row_idx"]
-    row_idx_hl = all_data["HLmodel"]["row_idx"]
-    omega = all_data["abstraction_data"]["omega"]
-
-    # pooled noises (for quick dim checks)
-    d_l = next(iter(det_ll.values())).shape[1]
-    d_h = next(iter(det_hl.values())).shape[1]
-
-    # Estimate per-intervention mixing with bias, then average
-    def fit_with_bias(U: np.ndarray, D: np.ndarray) -> np.ndarray:
-        U_aug = np.concatenate([U, np.ones((U.shape[0], 1))], axis=1)  # (N, d+1)
-        # D^T ≈ A @ U_aug^T  => A ∈ R^{d × (d+1)}
-        return D.T @ np.linalg.pinv(U_aug.T)
-
-    A_L_list, A_H_list = [], []
-    for iota, Dl in det_ll.items():
-        if not _is_bucket_key(iota): continue
-        Ul = noise_ll_all.get(iota, None)
-        if Ul is None or len(Ul) == 0 or len(Dl) == 0: continue
-        try:
-            A_i = fit_with_bias(Ul, Dl)
-            if A_i.shape == (d_l, d_l + 1):
-                A_L_list.append(A_i)
-        except np.linalg.LinAlgError:
-            pass
-
-    for eta, Dh in det_hl.items():
-        if not _is_bucket_key(eta): continue
-        Uh = noise_hl_all.get(eta, None)
-        if Uh is None or len(Uh) == 0 or len(Dh) == 0: continue
-        try:
-            A_i = fit_with_bias(Uh, Dh)
-            if A_i.shape == (d_h, d_h + 1):
-                A_H_list.append(A_i)
-        except np.linalg.LinAlgError:
-            pass
-
-    if not A_L_list or not A_H_list:
-        logger.warning("[BARYCA] Not enough per-intervention fits; falling back to identity+zero bias.")
-        W_L_bary, b_L_bary = np.eye(d_l), np.zeros((d_l, 1))
-        W_H_bary, b_H_bary = np.eye(d_h), np.zeros((d_h, 1))
-    else:
-        A_L_bary = np.mean(np.stack(A_L_list, 0), axis=0)  # (d_l, d_l+1)
-        A_H_bary = np.mean(np.stack(A_H_list, 0), axis=0)  # (d_h, d_h+1)
-        W_L_bary, b_L_bary = A_L_bary[:, :d_l], A_L_bary[:, d_l:d_l+1]
-        W_H_bary, b_H_bary = A_H_bary[:, :d_h], A_H_bary[:, d_h:d_h+1]
-
-    results = {}
-    for k, fold in enumerate(saved_folds):
-        # Reuse aligned build to get TRAIN-aligned U’s (order matters)
-        (det_ll_t, det_hl_t, noise_ll_t, noise_hl_t,
-         slice_map_ll, slice_map_hl, tot_n_ll, _) = build_fold_aligned_buckets(
-            det_ll=det_ll, det_hl=det_hl,
-            noise_ll=noise_ll_all, noise_hl=noise_hl_all,
-            row_idx_ll=row_idx_ll, row_idx_hl=row_idx_hl,
-            omega=omega, train_idx=fold["train"]
-        )
-
-        # Build barycentric X from aligned U's (preserving per-pair alignment)
-        X_L_list, X_H_list = [], []
-        for iota, Ul_t in noise_ll_t.items():
-            eta = omega.get(iota, None)
-            if eta is None: continue
-            Uh_t = noise_hl_t.get(iota, None)  # read HL by iota to match new keying
-            if Uh_t is None: continue
-
-            # Convert tensors to numpy before LS math
-            Ul_np = Ul_t.detach().cpu().numpy()
-            Uh_np = Uh_t.detach().cpu().numpy()
-
-            # shapes: W_* (d_*, d_*), b_* (d_*,1), U_*^T (d_*, n)
-            Xl = (W_L_bary @ Ul_np.T + b_L_bary)     # (d_l, n)
-            Xh = (W_H_bary @ Uh_np.T + b_H_bary)     # (d_h, n)
-            X_L_list.append(Xl)
-            X_H_list.append(Xh)
-
-        if not X_L_list or not X_H_list:
-            logger.warning(f"[BARYCA] Fold {k}: no aligned train samples; returning zeros.")
-            Tmat = np.zeros((d_h, d_l))
-        else:
-            X_L_bary = np.concatenate(X_L_list, axis=1)  # (d_l, N_train_aligned)
-            X_H_bary = np.concatenate(X_H_list, axis=1)  # (d_h, N_train_aligned)
-            try:
-                Tmat = (X_H_bary @ np.linalg.pinv(X_L_bary)).astype(np.float64)
-            except np.linalg.LinAlgError:
-                logger.warning(f"[BARYCA] pinv failed on fold {k}; using zeros.")
-                Tmat = np.zeros((d_h, d_l))
-
-        results[f"fold_{k}"] = {
-            "seed": int(fold.get("seed", 0)),
-            "T": Tmat,
-            "train_N": tot_n_ll,
-            "test_N": len(fold["test"]),
-        }
-        logger.info(f"[BARYCA] Fold {k+1}/{len(saved_folds)} done "
-                    f"(train_N={tot_n_ll}, test_N={len(fold['test'])}).")
-
-    os.makedirs(outdir, exist_ok=True)
-    joblib.dump(results, os.path.join(outdir, "baryca_cv_results_empirical.pkl"))
-    logger.info(f"BARYCA results saved to {outdir}")
-    return results
-
-
-# ----------------- Abs-LiNGAM baseline (per-fold, train split) -----------------
-def run_abslingam(all_data: Dict[str, Any], saved_folds: List[dict], outdir: str):
-    logger.info("Running Abs-LiNGAM baseline (per-fold, train-split)…")
-
-    Dll_obs = all_data["LLmodel"]["data"][None]  # (N, d_l)
-    Dhl_obs = all_data["HLmodel"]["data"][None]  # (N, d_h)
-
-    results = {}
-    for k, fold in enumerate(saved_folds):
-        train_idx = fold["train"]
-        Dll_train = Dll_obs[train_idx]
-        Dhl_train = Dhl_obs[train_idx]
-
-        fold_results = {}
-        for style in ["Perfect", "Noisy"]:
-            T_matrix, error = optools.abs_lingam_reconstruction_v2(
-                Dll_train, Dhl_train,
-                n_paired_samples=min(len(Dll_train), len(Dhl_train)),
-                style=style, tau_threshold=1e-2
-            )
-            fold_results[style] = {
-                "T": T_matrix,
-                "error": error,
-                "train_N": len(train_idx),
-                "test_N": len(fold["test"]),
-            }
-
-        results[f"fold_{k}"] = fold_results
-        logger.info(f"[Abs-LiNGAM] Fold {k+1}/{len(saved_folds)} done "
-                    f"(train_N={len(train_idx)}, test_N={len(fold['test'])}).")
-
-    os.makedirs(outdir, exist_ok=True)
-    joblib.dump(results, os.path.join(outdir, "abslingam_cv_results_empirical.pkl"))
-    logger.info(f"Abs-LiNGAM results saved to {outdir}")
-    return results
-
-
 # ----------------- CLI -----------------
 def main():
-    parser = argparse.ArgumentParser(description="Battery ERICA-style (Affine ANM) — Global Adversary + Fold Handling")
+    parser = argparse.ArgumentParser(description="Modular Battery Optimization")
     parser.add_argument("--experiment", type=str, default="battery")
-    parser.add_argument("--test-size", type=float, default=0.1)
-    parser.add_argument("--seeds", type=int, nargs="+", default=[42, 43, 44, 45, 46])
+    parser.add_argument("--methods", type=str, nargs="+", 
+                       choices=["diroca", "gradca", "baryca", "abslingam"],
+                       default=["diroca", "gradca", "baryca", "abslingam"],
+                       help="Methods to run")
     parser.add_argument("--output-dir", type=str, default=None)
-    parser.add_argument("--skip-diroca", action="store_true")
-    parser.add_argument("--skip-gradca", action="store_true")
-    parser.add_argument("--skip-baryca", action="store_true")
-    parser.add_argument("--skip-abslingam", action="store_true")
     args = parser.parse_args()
 
     exp = args.experiment
-    outdir = args.output_dir or f"data/{exp}/results_empirical_9010"
-    os.makedirs(outdir, exist_ok=True)
-    logger.info(f"Output directory: {outdir}")
+    logger.info(f"Starting modular optimization for experiment: {exp}")
+    logger.info(f"Methods to run: {args.methods}")
 
     # Load data bundle
     all_data = ut.load_all_data(exp)
     all_data["experiment_name"] = exp
 
-    # Build stratified 90/10 splits on HL observations (NO [None])
-    Dhl_obs = all_data["HLmodel"]["data"][None]  # (N, d_h)
-    saved_folds = make_stratified_9010_splits(Dhl_obs, args.test_size, args.seeds)
-    logger.info(f"Built {len(saved_folds)} stratified 90/10 splits over seeds: {args.seeds}")
-
-    # Empirical lower bounds (like original)
-    l = next(iter(all_data["LLmodel"]["deterministic"].values())).shape[1]
-    h = next(iter(all_data["HLmodel"]["deterministic"].values())).shape[1]
-    train_n = len(saved_folds[0]["train"])
-    ll_bound = round(ut.compute_empirical_radius(N=train_n, eta=0.05, c1=1000.0, c2=1.0, alpha=2.0, m=l), 3)
-    hl_bound = round(ut.compute_empirical_radius(N=train_n, eta=0.05, c1=1000.0, c2=1.0, alpha=2.0, m=h), 3)
-    radius_pairs = [
-        (ll_bound, hl_bound),  # theoretical lower bound
-        (1.0, 1.0),
-        (2.0, 2.0),
-        (4.0, 4.0),
-        (8.0, 8.0),
-    ]
-    logger.info(f"Radius sweep: {radius_pairs}")
-
     results = {}
 
-    if not args.skip_diroca:
-        results["diroca"] = run_diroca_radius_sweep(all_data, saved_folds, radius_pairs, outdir)
+    for method in args.methods:
+        logger.info(f"\n{'='*60}")
+        logger.info(f"Running {method.upper()}")
+        logger.info(f"{'='*60}")
+        
+        try:
+            # Load method-specific config
+            config = load_method_config(method, exp)
+            
+            # Build stratified splits using config
+            cv_config = config["cv"]
+            Dhl_obs = all_data["HLmodel"]["data"][None]  # (N, d_h)
+            saved_folds = make_stratified_9010_splits(Dhl_obs, cv_config["test_size"], cv_config["seeds"])
+            logger.info(f"Built {len(saved_folds)} stratified splits over seeds: {cv_config['seeds']}")
+            
+            # Run method-specific optimization
+            if method == "diroca":
+                results[method] = run_diroca(all_data, config, saved_folds)
+            elif method == "gradca":
+                results[method] = run_gradca(all_data, config, saved_folds)
+            elif method == "baryca":
+                results[method] = run_baryca(all_data, config, saved_folds)
+            elif method == "abslingam":
+                results[method] = run_abslingam(all_data, config, saved_folds)
+            else:
+                logger.warning(f"Unknown method: {method}")
+                continue
+                
+        except Exception as e:
+            logger.error(f"Error running {method}: {e}")
+            continue
 
-    if not args.skip_gradca:
-        results["gradca"] = run_gradca_affine(
-            all_data, saved_folds, outdir,
-            eta_min=1e-3, num_steps_min=1, max_iter=5000, tol=1e-4,
-            seed=23, initialization="zeros", gain=0.0, optimizers="adam"
-        )
-
-    if not args.skip_baryca:
-        results["baryca"] = run_baryca_empirical(all_data, saved_folds, outdir)
-
-    if not args.skip_abslingam:
-        results["abslingam"] = run_abslingam(all_data, saved_folds, outdir)
-
-    logger.info("All optimizations completed.")
-    print("\n" + "=" * 60)
-    print("BATTERY EMPIRICAL OPTIMIZATION (Affine ANM + Global Adversary + Folds) — COMPLETED")
-    print("=" * 60)
-    print(f"Experiment: {exp}")
-    print(f"Output dir: {outdir}")
-    print(f"Methods run: {list(results.keys())}")
-    print(f"Number of folds: {len(saved_folds)}")
+    logger.info("\n" + "=" * 60)
+    logger.info("MODULAR BATTERY OPTIMIZATION — COMPLETED")
+    logger.info("=" * 60)
+    logger.info(f"Experiment: {exp}")
+    logger.info(f"Methods completed: {list(results.keys())}")
+    logger.info(f"Number of folds: {len(saved_folds) if 'saved_folds' in locals() else 'N/A'}")
 
 
 if __name__ == "__main__":

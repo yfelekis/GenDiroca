@@ -329,39 +329,61 @@ def load_and_prepare_battery(save: bool = True, config_path: str = "configs/batt
     def _cg_values(side: str) -> List[float]:
         return list(config["interventions"][side]["cg_values"])
 
+    # Create intervention objects first to ensure consistent references
+    ll_interventions = {cg: Intervention({"CG": cg}) for cg in _cg_values("low_level")}
+    hl_interventions = {cg: Intervention({"CG": cg}) for cg in _cg_values("high_level")}
+
+    # Initialize with aligned data and build row indices during bucket creation
+    K = X_ll_aligned.shape[0]
+    aligned_pos = np.arange(K)
+    CG_ll_aligned = X_ll_aligned[:, 0].astype(float)
+    CG_hl_aligned = X_hl_aligned[:, 0].astype(float)
+
     Dll_samples: Dict[Any, np.ndarray] = {None: X_ll_aligned}
     Dhl_samples: Dict[Any, np.ndarray] = {None: X_hl_aligned}
     Dll_noise: Dict[Any, np.ndarray] = {None: U_ll_aligned}
     Dhl_noise: Dict[Any, np.ndarray] = {None: U_hl_aligned}
 
-    bootstrap_config = config["bootstrap"]
-    min_samples = int(bootstrap_config["min_samples"])
+    row_idx_ll: Dict[Any, np.ndarray] = {None: aligned_pos}
+    row_idx_hl: Dict[Any, np.ndarray] = {None: aligned_pos}
+
+    # Bootstrap configuration
+    bootstrap_cfg = config["bootstrap"]
+    min_samples = int(bootstrap_cfg["min_samples"]) if bootstrap_cfg["enabled"] else 0
+    rng = np.random.default_rng(seed)
     tol = float(config.get("alignment", {}).get("tolerance", 1e-9))
 
-    # LL per-intervention
+    # LL per-intervention (build indices first, then sample with replacement if needed)
     for cg_ll in _cg_values("low_level"):
-        X_sel, m = _select_by_cg(X_ll_aligned, cg_ll, tol=tol)
-        U_sel = U_ll_aligned[m]
-        if bootstrap_config["enabled"]:
-            # different seeds to decorrelate X/U resamples deterministically per bucket
-            X_sel = _bootstrap_augment(X_sel, min_samples=min_samples, seed=seed + int(cg_ll))
-            U_sel = _bootstrap_augment(U_sel, min_samples=min_samples, seed=seed + int(cg_ll) + 1000)
-        Dll_samples[Intervention({"CG": cg_ll})] = X_sel
-        Dll_noise[Intervention({"CG": cg_ll})] = U_sel
+        iv = ll_interventions[cg_ll]
+        base_idx = np.where(np.isclose(CG_ll_aligned, float(cg_ll), atol=tol))[0]
+        if base_idx.size == 0:
+            continue
+        if bootstrap_cfg["enabled"] and base_idx.size < min_samples:
+            sel = rng.choice(base_idx, size=min_samples, replace=True)
+        else:
+            sel = base_idx
+        Dll_samples[iv] = X_ll_aligned[sel]
+        Dll_noise[iv] = U_ll_aligned[sel]
+        row_idx_ll[iv] = sel
 
     # HL per-intervention
     for cg_hl in _cg_values("high_level"):
-        X_sel, m = _select_by_cg(X_hl_aligned, cg_hl, tol=tol)
-        U_sel = U_hl_aligned[m]
-        if bootstrap_config["enabled"]:
-            X_sel = _bootstrap_augment(X_sel, min_samples=min_samples, seed=seed + int(cg_hl))
-            U_sel = _bootstrap_augment(U_sel, min_samples=min_samples, seed=seed + int(cg_hl) + 2000)
-        Dhl_samples[Intervention({"CG": cg_hl})] = X_sel
-        Dhl_noise[Intervention({"CG": cg_hl})] = U_sel
+        iv = hl_interventions[cg_hl]
+        base_idx = np.where(np.isclose(CG_hl_aligned, float(cg_hl), atol=tol))[0]
+        if base_idx.size == 0:
+            continue
+        if bootstrap_cfg["enabled"] and base_idx.size < min_samples:
+            sel = rng.choice(base_idx, size=min_samples, replace=True)
+        else:
+            sel = base_idx
+        Dhl_samples[iv] = X_hl_aligned[sel]
+        Dhl_noise[iv] = U_hl_aligned[sel]
+        row_idx_hl[iv] = sel
 
-    # Define intervention sets
-    Ill_relevant = [None] + [Intervention({"CG": v}) for v in _cg_values("low_level")]
-    Ihl_relevant = [None] + [Intervention({"CG": v}) for v in _cg_values("high_level")]
+    # Define intervention sets using the same objects
+    Ill_relevant = [None] + list(ll_interventions.values())
+    Ihl_relevant = [None] + list(hl_interventions.values())
 
     # Center noise per intervention (mean-zero), then zero CG noise under do(CG=·)
     ll_cg_idx = LL_NODES.index("CG")
@@ -411,15 +433,6 @@ def load_and_prepare_battery(save: bool = True, config_path: str = "configs/batt
     det_ll_dict = _compute_D_per_iv(LLmodel, ll_coeffs, ll_intercepts)
     det_hl_dict = _compute_D_per_iv(HLmodel, hl_coeffs, hl_intercepts)
 
-    # Optional bootstrap on D (kept, as in your original, for size balance)
-    if bootstrap_config["enabled"]:
-        for iv in list(det_ll_dict.keys()):
-            if iv is not None:
-                det_ll_dict[iv] = _bootstrap_augment(det_ll_dict[iv], min_samples=min_samples, seed=seed + 5000)
-        for iv in list(det_hl_dict.keys()):
-            if iv is not None:
-                det_hl_dict[iv] = _bootstrap_augment(det_hl_dict[iv], min_samples=min_samples, seed=seed + 6000)
-
     LLmodel["deterministic"] = det_ll_dict
     HLmodel["deterministic"] = det_hl_dict
 
@@ -427,13 +440,17 @@ def load_and_prepare_battery(save: bool = True, config_path: str = "configs/batt
     LLmodel["noise"]["U_ll_hat"] = U_ll_aligned
     HLmodel["noise"]["U_hl_hat"] = U_hl_aligned
 
-    # ω mapping (kept in-code; consider moving to config/alignment.omega_map later)
+    # Add row indices to models (already computed during bucket building)
+    LLmodel["row_idx"] = row_idx_ll
+    HLmodel["row_idx"] = row_idx_hl
+
+    # ω mapping (reuse same Intervention objects for key identity)
     omega = {
         None: None,
-        Intervention({"CG": 75.0}): Intervention({"CG": 75.0}),
-        Intervention({"CG": 110.0}): Intervention({"CG": 100.0}),
-        Intervention({"CG": 180.0}): Intervention({"CG": 200.0}),
-        Intervention({"CG": 200.0}): Intervention({"CG": 200.0}),
+        ll_interventions[75.0]:  hl_interventions[75.0],
+        ll_interventions[110.0]: hl_interventions[100.0],
+        ll_interventions[180.0]: hl_interventions[200.0],
+        ll_interventions[200.0]: hl_interventions[200.0],
     }
     abstraction_data = {"T": None, "omega": omega}
 

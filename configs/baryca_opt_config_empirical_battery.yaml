@@ -1,0 +1,19 @@
+# BaryCA Optimization Configuration for Battery Data
+method: "baryca"
+description: "BaryCA with empirical barycentric estimation"
+
+# Optimization parameters
+optimization:
+  # BaryCA doesn't use iterative optimization, but we can configure the LS fitting
+  regularization: 0.00000001    # Regularization for pinv
+  min_samples_per_intervention: 1  # Minimum samples needed per intervention
+
+# Cross-validation
+cv:
+  test_size: 0.1
+  seeds: [42, 43, 44, 45, 46]
+
+# Output
+output:
+  save_directory: "data/battery/results_empirical_9010"
+  filename_prefix: "baryca_cv_results_empirical"

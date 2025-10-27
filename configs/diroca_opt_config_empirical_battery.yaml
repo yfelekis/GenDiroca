@@ -1,18 +1,42 @@
-eta_max: 0.001
-eta_min: 0.001
+# DiRoCA Optimization Configuration for Battery Data
+method: "diroca"
+description: "DiRoCA with global adversary and radius sweep"
 
-max_iter: 5000
-num_steps_min: 5
-num_steps_max: 2
-tol: 0.0001
+# Optimization parameters
+optimization:
+  eta_min: 0.001         # Learning rate for T matrix
+  eta_max: 0.001         # Learning rate for Theta/Phi adversaries
+  num_steps_min: 5       # Steps per T update
+  num_steps_max: 2       # Steps per adversary update
+  max_iter: 5000         # Maximum iterations
+  tol: 0.0001            # Convergence tolerance
+  initialization: "zeros"  # "zeros" or "random"
+  gain: 0.0              # Xavier initialization gain (0.0 = no Xavier)
+  optimizers: "adam"     # "adam" or "adam_betas"
 
-k_folds: 5
+# Radius sweep configuration
+radius_sweep:
+  # Theoretical bounds (computed automatically)
+  use_theoretical_bounds: true
+  theoretical_params:
+    eta: 0.05
+    c1: 1000.0
+    c2: 1.0
+    alpha: 2.0
+  
+  # Additional radius pairs to test
+  additional_pairs:
+    - [1.0, 1.0]
+    - [2.0, 2.0]
+    - [4.0, 4.0]
+    - [8.0, 8.0]
 
-seed: 23
-gain: 0.0
-optimizers: 'adam'
-robust_L: true 
-robust_H: true
+# Cross-validation
+cv:
+  test_size: 0.1
+  seeds: [42, 43, 44, 45, 46]
 
-initialization: 'random'
-
+# Output
+output:
+  save_directory: "data/battery/results_empirical_9010"
+  filename_prefix: "diroca_cv_results_empirical"
