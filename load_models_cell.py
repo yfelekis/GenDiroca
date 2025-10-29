@@ -12,7 +12,8 @@ ll_model.eval()
 print("✓ Low-level U-Net model loaded")
 
 # Load high-level linear model
-hl_model = torch.load(f'{data_dir}/hl_model.pkl')
+import joblib
+hl_model = joblib.load(f'{data_dir}/hl_model.joblib')
 print("✓ High-level linear model loaded")
 
 # Load abduced noise

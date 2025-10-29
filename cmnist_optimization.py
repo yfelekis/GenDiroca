@@ -36,7 +36,7 @@ def load_cmnist_data(data_dir='data/cmnist'):
     ll_model.load_state_dict(ll_model_state)
     ll_model.eval()
     
-    hl_model = torch.load(f'{data_dir}/hl_model.pkl')
+    hl_model = joblib.load(f'{data_dir}/hl_model.joblib')
     
     # Load noise
     U_ll_hat = torch.load(f'{data_dir}/U_ll_hat.pkl')
