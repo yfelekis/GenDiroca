@@ -368,19 +368,19 @@ def main():
     ap.add_argument('--seed', type=int, default=23)
 
     # DiRoCA params
-    ap.add_argument('--diroca-max-iter', type=int, default=10)
-    ap.add_argument('--diroca-tol', type=float, default=1e-6)
+    ap.add_argument('--diroca-max-iter', type=int, default=5000)
+    ap.add_argument('--diroca-tol', type=float, default=1e-4)
     ap.add_argument('--diroca-eta-min', type=float, default=1e-3)
     ap.add_argument('--diroca-eta-max', type=float, default=1e-3)
-    ap.add_argument('--diroca-steps-min', type=int, default=1)
-    ap.add_argument('--diroca-steps-max', type=int, default=5)
-    ap.add_argument('--diroca-init', type=str, choices=['zeros','random'], default='zeros')
+    ap.add_argument('--diroca-steps-min', type=int, default=5)
+    ap.add_argument('--diroca-steps-max', type=int, default=2)
+    ap.add_argument('--diroca-init', type=str, choices=['zeros','random'], default='random')
     ap.add_argument('--diroca-optim', type=str, choices=['adam','adam_betas'], default='adam')
     ap.add_argument('--diroca-gain', type=float, default=0.0)
 
     # GradCA params (reuses DiRoCA core with eps=delta=0, and no max step)
-    ap.add_argument('--gradca-max-iter', type=int, default=10)
-    ap.add_argument('--gradca-tol', type=float, default=1e-6)
+    ap.add_argument('--gradca-max-iter', type=int, default=5000)
+    ap.add_argument('--gradca-tol', type=float, default=1e-5)
     ap.add_argument('--gradca-eta-min', type=float, default=1e-3)
     ap.add_argument('--gradca-steps-min', type=int, default=1)
     ap.add_argument('--gradca-init', type=str, choices=['zeros','random'], default='zeros')
@@ -388,7 +388,7 @@ def main():
     ap.add_argument('--gradca-gain', type=float, default=0.0)
 
     # BaryCA params
-    ap.add_argument('--baryca-max-iter', type=int, default=10)
+    ap.add_argument('--baryca-max-iter', type=int, default=5000)
     ap.add_argument('--baryca-tol', type=float, default=1e-5)
 
     # switches

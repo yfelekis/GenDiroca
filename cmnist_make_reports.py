@@ -121,17 +121,132 @@ def make_report_for_dataset(ds_dir, bins=36, v_thresh=0.1, num_resid_pixels=5, s
     fig1.suptitle("Residual distributions (sampled pixels)")
     fig1.tight_layout()
 
-    # One qualitative triplet (true, pred, residual)
     idx_vis = rng.integers(0, len(U_ll_hat))
-    resid_img = to01_any(U_ll_hat[idx_vis]).transpose(1,2,0)
-    true_img  = to01_any(images[idx_vis]).transpose(1,2,0)
-    pred_img  = np.clip(true_img - resid_img, 0.0, 1.0)
-    fig2, axs2 = plt.subplots(1, 3, figsize=(9,3))
-    axs2[0].imshow(true_img); axs2[0].set_title("True image"); axs2[0].axis("off")
-    axs2[1].imshow(pred_img); axs2[1].set_title("Pred deterministic"); axs2[1].axis("off")
-    axs2[2].imshow(resid_img); axs2[2].set_title("Residual (noise)"); axs2[2].axis("off")
-    fig2.suptitle("Qualitative check")
+
+    def map_to_01(x):
+        x = x.detach().cpu().float()
+        # If it looks like [-1,1], map; otherwise assume already [0,1]
+        if x.min() >= -1.05 and x.max() <= 1.05:
+            x = (x + 1.0) / 2.0
+        return x.clamp(0, 1)
+
+    def background_level(x01, pct=5):
+        """Per-channel low-percentile used as 'background' estimate."""
+        x = x01.detach().cpu().float()          # (C,H,W)
+        return torch.quantile(x.view(x.shape[0], -1), pct/100.0, dim=1, keepdim=True)  # (C,1)
+
+    def apply_bg_shift(x01, bg):
+        """Shift by bg (from true image), clamp to [0,1] without stretching."""
+        x = x01.detach().cpu().float()
+        x_flat = x.view(x.shape[0], -1) - bg
+        return x_flat.clamp(0.0, 1.0).view_as(x)
+
+    # Deterministic prediction
+    with torch.no_grad():
+        det_pred = ll_model(
+            shapes[idx_vis:idx_vis+1],
+            digits[idx_vis:idx_vis+1],
+            colors[idx_vis:idx_vis+1]
+        )[0]  # (C,H,W)
+
+    true_img01  = map_to_01(images[idx_vis])           # (C,H,W)
+    pred_img01  = map_to_01(det_pred)                   # (C,H,W)
+    resid_raw   = U_ll_hat[idx_vis].detach().cpu()      # (C,H,W) around 0
+    recon_img01 = map_to_01(det_pred + resid_raw)       # (C,H,W)
+
+    # --- shared background reference from the true image ---
+    bg_true = background_level(true_img01, pct=5)       # (C,1)
+
+    true_disp  = apply_bg_shift(true_img01,  bg_true)
+    pred_disp  = apply_bg_shift(pred_img01,  bg_true)
+    recon_disp = apply_bg_shift(recon_img01, bg_true)
+
+    # Residual viz (diverging, centered at 0)
+    resid_np = resid_raw.permute(1,2,0).numpy()
+    mag = np.percentile(np.abs(resid_np).reshape(-1, resid_np.shape[-1]).mean(axis=1), 99)
+    mag = max(mag, 1e-6)
+
+    fig2, axs2 = plt.subplots(1, 4, figsize=(12, 3))
+    axs2[0].imshow(true_disp.permute(1,2,0).numpy()); axs2[0].set_title("True image"); axs2[0].axis("off")
+    axs2[1].imshow(pred_disp.permute(1,2,0).numpy()); axs2[1].set_title("Pred deterministic"); axs2[1].axis("off")
+    axs2[2].imshow(resid_np, cmap="RdBu_r", vmin=-mag, vmax=mag); axs2[2].set_title("Residual (noise)"); axs2[2].axis("off")
+    axs2[3].imshow(recon_disp.permute(1,2,0).numpy()); axs2[3].set_title("Reconstruction (D + U)"); axs2[3].axis("off")
+    fig2.suptitle("Qualitative check: true / D / U / D+U")
     fig2.tight_layout()
+
+    # Calculate similarity metrics between true_disp and recon_disp (single example)
+    true_flat = true_disp.view(-1).numpy()
+    recon_flat = recon_disp.view(-1).numpy()
+    pred_flat = pred_disp.view(-1).numpy()
+    mse_recon_example = float(np.mean((true_flat - recon_flat) ** 2))
+    psnr_recon_example = float(-10 * np.log10(mse_recon_example + 1e-10)) if mse_recon_example > 0 else float('inf')
+    corr_recon_example = float(np.corrcoef(true_flat, recon_flat)[0, 1])
+    mse_pred_example = float(np.mean((true_flat - pred_flat) ** 2))
+    psnr_pred_example = float(-10 * np.log10(mse_pred_example + 1e-10)) if mse_pred_example > 0 else float('inf')
+    corr_pred_example = float(np.corrcoef(true_flat, pred_flat)[0, 1])
+
+    # Calculate similarity metrics for all samples
+    num_samples = len(images)
+    mse_recon_list = []
+    psnr_recon_list = []
+    corr_recon_list = []
+    mse_pred_list = []
+    psnr_pred_list = []
+    corr_pred_list = []
+    
+    with torch.no_grad():
+        for i in range(num_samples):
+            # Get deterministic prediction
+            det_pred_i = ll_model(
+                shapes[i:i+1],
+                digits[i:i+1],
+                colors[i:i+1]
+            )[0]  # (C,H,W)
+            
+            true_img01_i = map_to_01(images[i])           # (C,H,W)
+            pred_img01_i = map_to_01(det_pred_i)          # (C,H,W)
+            resid_raw_i = U_ll_hat[i].detach().cpu()       # (C,H,W) around 0
+            recon_img01_i = map_to_01(det_pred_i + resid_raw_i)  # (C,H,W)
+            
+            # Use background from true image
+            bg_true_i = background_level(true_img01_i, pct=5)  # (C,1)
+            true_disp_i = apply_bg_shift(true_img01_i, bg_true_i)
+            pred_disp_i = apply_bg_shift(pred_img01_i, bg_true_i)
+            recon_disp_i = apply_bg_shift(recon_img01_i, bg_true_i)
+            
+            # Compute metrics for reconstruction (true vs D+U)
+            true_flat_i = true_disp_i.view(-1).numpy()
+            recon_flat_i = recon_disp_i.view(-1).numpy()
+            mse_recon_i = float(np.mean((true_flat_i - recon_flat_i) ** 2))
+            psnr_recon_i = float(-10 * np.log10(mse_recon_i + 1e-10)) if mse_recon_i > 0 else float('inf')
+            corr_recon_i = float(np.corrcoef(true_flat_i, recon_flat_i)[0, 1])
+            
+            # Compute metrics for deterministic prediction (true vs D)
+            pred_flat_i = pred_disp_i.view(-1).numpy()
+            mse_pred_i = float(np.mean((true_flat_i - pred_flat_i) ** 2))
+            psnr_pred_i = float(-10 * np.log10(mse_pred_i + 1e-10)) if mse_pred_i > 0 else float('inf')
+            corr_pred_i = float(np.corrcoef(true_flat_i, pred_flat_i)[0, 1])
+            
+            mse_recon_list.append(mse_recon_i)
+            psnr_recon_list.append(psnr_recon_i)
+            corr_recon_list.append(corr_recon_i)
+            mse_pred_list.append(mse_pred_i)
+            psnr_pred_list.append(psnr_pred_i)
+            corr_pred_list.append(corr_pred_i)
+    
+    # Average metrics across all samples
+    mse_recon_avg = float(np.mean(mse_recon_list))
+    psnr_recon_valid = [p for p in psnr_recon_list if p != float('inf')]
+    psnr_recon_avg = float(np.mean(psnr_recon_valid)) if psnr_recon_valid else float('inf')
+    corr_recon_avg = float(np.mean(corr_recon_list))
+    
+    mse_pred_avg = float(np.mean(mse_pred_list))
+    psnr_pred_valid = [p for p in psnr_pred_list if p != float('inf')]
+    psnr_pred_avg = float(np.mean(psnr_pred_valid)) if psnr_pred_valid else float('inf')
+    corr_pred_avg = float(np.mean(corr_pred_list))
+
+
+
 
     # 2) Counterfactual sweep (change color 0..9 for a fixed digit and fixed noise)
     with torch.no_grad():
@@ -208,6 +323,18 @@ def make_report_for_dataset(ds_dir, bins=36, v_thresh=0.1, num_resid_pixels=5, s
     txt.append("")
     txt.append("Residual independence (R² of residual ~ [digit,color]):")
     txt.append(f"  R² = {r2_resid:.4f}")
+    txt.append("")
+    txt.append("Reconstruction similarity (true vs D+U):")
+    txt.append(f"  Example (shown in figure):")
+    txt.append(f"    MSE = {mse_recon_example:.6f}, PSNR = {psnr_recon_example:.2f} dB, Correlation = {corr_recon_example:.4f}")
+    txt.append(f"  Average (all {num_samples} samples):")
+    txt.append(f"    MSE = {mse_recon_avg:.6f}, PSNR = {psnr_recon_avg:.2f} dB, Correlation = {corr_recon_avg:.4f}")
+    txt.append("")
+    txt.append("Deterministic prediction similarity (true vs D):")
+    txt.append(f"  Example (shown in figure):")
+    txt.append(f"    MSE = {mse_pred_example:.6f}, PSNR = {psnr_pred_example:.2f} dB, Correlation = {corr_pred_example:.4f}")
+    txt.append(f"  Average (all {num_samples} samples):")
+    txt.append(f"    MSE = {mse_pred_avg:.6f}, PSNR = {psnr_pred_avg:.2f} dB, Correlation = {corr_pred_avg:.4f}")
     txt.append("")
     txt.append("Counterfactual consistency scores:")
     txt.append(f"  digit_variance (shape invariance) : {var_digit:.6f}")
