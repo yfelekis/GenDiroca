@@ -1,9 +1,0 @@
-<NODES>
-F
-N
-B
-
-<EDGES>
-F -> N
-N -> B
-F <-> B

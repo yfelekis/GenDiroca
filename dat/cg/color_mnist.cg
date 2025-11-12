@@ -1,9 +1,0 @@
-<NODES>
-color
-digit
-image
-
-<EDGES>
-color <-> digit
-color -> image
-digit -> image
