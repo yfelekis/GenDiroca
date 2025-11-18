@@ -495,6 +495,7 @@ def make_report_for_dataset_z(ds_dir, bins=36, v_thresh=0.1,
 
     # =======================================================
     # 2) LL qualitative example (32x32) + metrics
+    #     *** residual viz fixed to scalar heatmap ***
     # =======================================================
     idx_vis = int(rng.integers(0, len(ll_imgs_32)))
 
@@ -507,7 +508,7 @@ def make_report_for_dataset_z(ds_dir, bins=36, v_thresh=0.1,
 
     true32 = map_to01(ll_imgs_32[idx_vis])
     pred32 = map_to01(det32)
-    resid32 = U_ll[idx_vis].detach().cpu()
+    resid32 = U_ll[idx_vis].detach().cpu()          # (3,H,W)
     recon32 = map_to01(det32 + resid32)
 
     bg32 = bg_level(true32.unsqueeze(0), pct=5.0)
@@ -515,14 +516,21 @@ def make_report_for_dataset_z(ds_dir, bins=36, v_thresh=0.1,
     pred32_d = apply_bg(pred32.unsqueeze(0), bg32)[0]
     recon32_d = apply_bg(recon32.unsqueeze(0), bg32)[0]
 
-    resid_np = resid32.permute(1, 2, 0).numpy()
-    mag = np.percentile(np.abs(resid_np).ravel(), 99)
+    # --- NEW: scalar residual heatmap instead of 3-channel RGB ---
+    # take per-pixel mean over channels → (H,W)
+    resid_scalar = resid32.mean(dim=0)     # (H,W)
+    resid_np = resid_scalar.numpy()
+    mag = np.percentile(np.abs(resid_np), 99)
     mag = max(mag, 1e-6)
 
     fig2, axs2 = plt.subplots(1, 4, figsize=(11, 3))
     axs2[0].imshow(true32_d.permute(1, 2, 0).numpy()); axs2[0].set_title("True 32x32"); axs2[0].axis("off")
     axs2[1].imshow(pred32_d.permute(1, 2, 0).numpy()); axs2[1].set_title("Deterministic D"); axs2[1].axis("off")
-    axs2[2].imshow(resid_np, cmap="RdBu_r", vmin=-mag, vmax=mag); axs2[2].set_title("Residual U"); axs2[2].axis("off")
+
+    im_res = axs2[2].imshow(resid_np, cmap="RdBu_r", vmin=-mag, vmax=mag)
+    axs2[2].set_title("Residual U (mean over channels)"); axs2[2].axis("off")
+    plt.colorbar(im_res, ax=axs2[2], fraction=0.046, pad=0.04)
+
     axs2[3].imshow(recon32_d.permute(1, 2, 0).numpy()); axs2[3].set_title("D + U"); axs2[3].axis("off")
     fig2.suptitle("Low-level decomposition (32x32)")
     fig2.tight_layout()
