@@ -1,0 +1,21 @@
+# BaryCA Optimization Configuration for LUCAS Data
+method: "baryca"
+enabled: true
+description: "Barycentric CA on non-linear LUCAS"
+
+data:
+  data_path: "data/lucas/lucas_pack.pkl"
+  experiment: "lucas"
+
+optimization:
+  lr: 0.001         # learning rate for T
+  max_iter: 5000
+  tol: 0.00001
+
+cv:
+  k_folds: 5
+  seed: 23
+
+output:
+  save_directory: "data/lucas/results_nonlinear"
+  filename_prefix: "baryca_cv_results_empirical"

@@ -437,188 +437,162 @@ def run_gradca(all_data: Dict[str, Any], config: Dict[str, Any], saved_folds: Li
     logger.info(f"GradCA results saved to {output_path}")
     return results
 
+# ----------------------------- BaryCA (LUCAS-style) -----------------------------
+
+def barycentric_objective_battery_lucas_style(
+    T: torch.Tensor,
+    det_ll_t: Dict[Any, torch.Tensor],
+    det_hl_t: Dict[Any, torch.Tensor],
+    noise_ll_t: Dict[Any, torch.Tensor],
+    noise_hl_t: Dict[Any, torch.Tensor],
+) -> torch.Tensor:
+    """
+    LUCAS-style BaryCA objective, but battery-safe.
+
+    Steps:
+      1) Concatenate ALL aligned TRAIN deterministic samples across interventions.
+         (No stacking => no equal-N requirement.)
+      2) Take the global mean deterministic vector on each side.
+      3) Add TRAIN aligned noises (concatenated).
+      4) Fit T by minimizing Frobenius mismatch.
+
+    loss = || T (mean_Dll + U_ll_concat) - (mean_Dhl + U_hl_concat) ||_F^2 / N
+    """
+    device = T.device
+
+    # collect aligned train buckets (already aligned by build_fold_aligned_buckets)
+    ll_det_list, hl_det_list = [], []
+    ll_noise_list, hl_noise_list = [], []
+
+    for iota, Dl in det_ll_t.items():
+        Dh = det_hl_t.get(iota, None)
+        Ul = noise_ll_t.get(iota, None)
+        Uh = noise_hl_t.get(iota, None)
+        if Dh is None or Ul is None or Uh is None:
+            continue
+
+        ll_det_list.append(Dl.to(device))
+        hl_det_list.append(Dh.to(device))
+        ll_noise_list.append(Ul.to(device))
+        hl_noise_list.append(Uh.to(device))
+
+    if not ll_det_list:
+        return torch.tensor(0.0, device=device)
+
+    # 1) concatenate (N_total, d_*)
+    Dll_all = torch.cat(ll_det_list, dim=0)
+    Dhl_all = torch.cat(hl_det_list, dim=0)
+    Ull_all = torch.cat(ll_noise_list, dim=0)
+    Uhl_all = torch.cat(hl_noise_list, dim=0)
+
+    # 2) global deterministic barycenters (1, d_*)
+    mean_Dll = Dll_all.mean(dim=0, keepdim=True)
+    mean_Dhl = Dhl_all.mean(dim=0, keepdim=True)
+
+    # 3) barycentric endogenous samples (broadcast mean over all train rows)
+    endo_ll = mean_Dll + Ull_all   # (N_total, d_l)
+    endo_hl = mean_Dhl + Uhl_all   # (N_total, d_h)
+
+    # 4) Frobenius loss
+    diff = (T @ endo_ll.T).T - endo_hl
+    N_total = endo_ll.shape[0]
+    return torch.norm(diff, p="fro")**2 / max(1, N_total)
+
 
 def run_baryca(all_data: Dict[str, Any], config: Dict[str, Any], saved_folds: List[dict]) -> Dict[str, Any]:
     """
-    Run BaryCA optimization with config-driven parameters.
+    Battery BaryCA rewritten to *match LUCAS*:
 
-    Overview per fold:
-      1) For each intervention bucket (LL and HL), fit an affine map
-         D ≈ A [U; 1] using only TRAIN rows (per fold).
-      2) Average these A's over interventions to get barycentric operators
-         A_L^{bary}, A_H^{bary} and decompose them into (W_L, b_L), (W_H, b_H).
-      3) Use the TRAIN-aligned U's (via build_fold_aligned_buckets) and the
-         barycentric operators to generate X_L^{bary}, X_H^{bary}.
-      4) Solve a regularized least-squares problem
-             X_H^{bary} ≈ T X_L^{bary}
-         using the Gram matrix:
-             G = X_L^{bary} X_L^{bary}^T,
-             T = X_H^{bary} X_L^{bary}^T (G + λI)^{-1}.
+      per fold:
+        - build aligned TRAIN buckets (det+noise) using build_fold_aligned_buckets
+        - compute barycentric objective as:
+             mean_det + train_noise
+        - optimize T with Adam GD on that barycentric objective
+
+    This is the same computational philosophy as the LUCAS script,
+    except barycenter uses concatenation so unequal bucket sizes are OK.
     """
     opt_config = config["optimization"]
     output_config = config["output"]
 
-    det_ll_all = all_data["LLmodel"].get("deterministic", {})
-    det_hl_all = all_data["HLmodel"].get("deterministic", {})
-    noise_ll_all = all_data["LLmodel"].get("noise", {})
-    noise_hl_all = all_data["HLmodel"].get("noise", {})
+    det_ll_all = all_data["LLmodel"]["deterministic"]
+    det_hl_all = all_data["HLmodel"]["deterministic"]
+    noise_ll_all = all_data["LLmodel"]["noise"]
+    noise_hl_all = all_data["HLmodel"]["noise"]
     row_idx_ll = all_data["LLmodel"]["row_idx"]
     row_idx_hl = all_data["HLmodel"]["row_idx"]
     omega = all_data["abstraction_data"]["omega"]
 
-    # dimensions
     d_l = next(iter(det_ll_all.values())).shape[1]
     d_h = next(iter(det_hl_all.values())).shape[1]
 
-    regularization = opt_config.get("regularization", 1e-8)
-    min_samples = opt_config.get("min_samples_per_intervention", 1)
-
-    def fit_with_bias(U: np.ndarray, D: np.ndarray) -> np.ndarray:
-        """
-        Fit affine map D ≈ A [U; 1]:
-          - U: (N, d_u)
-          - D: (N, d_out)
-          Returns A of shape (d_out, d_u + 1).
-        """
-        U = np.asarray(U, dtype=float)
-        D = np.asarray(D, dtype=float)
-        U_aug = np.concatenate([U, np.ones((U.shape[0], 1))], axis=1)  # (N, d_u + 1)
-        # Solve D^T ≈ A U_aug^T  => A ∈ R^{d_out × (d_u+1)}
-        return D.T @ np.linalg.pinv(U_aug.T)
+    lr = opt_config.get("lr", 1e-3)
+    max_iter = opt_config.get("max_iter", 5000)
+    tol = opt_config.get("tol", 1e-5)
 
     results = {}
 
-    for k, fold in enumerate(saved_folds):
+    for fold_id, fold in enumerate(saved_folds):
         train_idx = np.asarray(fold["train"], dtype=int)
+        seed_fold = int(fold.get("seed", 23))
+        torch.manual_seed(seed_fold)
+        np.random.seed(seed_fold)
 
-        # ---------- 1. Per-intervention affine fits ON TRAIN ONLY ----------
-        A_L_list, A_H_list = [], []
-
-        # --- LL side ---
-        for iota, Dl in det_ll_all.items():
-            if not _is_bucket_key(iota):
-                continue
-            Ul = noise_ll_all.get(iota, None)
-            idx_global_ll = row_idx_ll.get(iota, None)
-            if Ul is None or idx_global_ll is None:
-                continue
-
-            # restrict to TRAIN rows
-            mask_train = np.isin(idx_global_ll, train_idx)
-            if not mask_train.any():
-                continue
-            Dl_tr = np.asarray(Dl)[mask_train]
-            Ul_tr = np.asarray(Ul)[mask_train]
-
-            if (Dl_tr.shape[0] < min_samples) or (Ul_tr.shape[0] < min_samples):
-                continue
-
-            try:
-                A_i = fit_with_bias(Ul_tr, Dl_tr)  # (d_l, d_l+1) if noise dim == d_l
-                if A_i.shape == (d_l, d_l + 1):
-                    A_L_list.append(A_i)
-            except np.linalg.LinAlgError:
-                continue
-
-        # --- HL side ---
-        for eta, Dh in det_hl_all.items():
-            if not _is_bucket_key(eta):
-                continue
-            Uh = noise_hl_all.get(eta, None)
-            idx_global_hl = row_idx_hl.get(eta, None)
-            if Uh is None or idx_global_hl is None:
-                continue
-
-            # restrict to TRAIN rows
-            mask_train = np.isin(idx_global_hl, train_idx)
-            if not mask_train.any():
-                continue
-            Dh_tr = np.asarray(Dh)[mask_train]
-            Uh_tr = np.asarray(Uh)[mask_train]
-
-            if (Dh_tr.shape[0] < min_samples) or (Uh_tr.shape[0] < min_samples):
-                continue
-
-            try:
-                A_i = fit_with_bias(Uh_tr, Dh_tr)  # (d_h, d_h+1) if noise dim == d_h
-                if A_i.shape == (d_h, d_h + 1):
-                    A_H_list.append(A_i)
-            except np.linalg.LinAlgError:
-                continue
-
-        # If we have no valid per-intervention fits, fall back to identity
-        if not A_L_list or not A_H_list:
-            logger.warning(f"[BaryCA] Fold {k}: not enough per-intervention fits; "
-                           f"using identity+zero bias barycentric operators.")
-            W_L_bary, b_L_bary = np.eye(d_l), np.zeros((d_l, 1))
-            W_H_bary, b_H_bary = np.eye(d_h), np.zeros((d_h, 1))
-        else:
-            A_L_bary = np.mean(np.stack(A_L_list, axis=0), axis=0)  # (d_l, d_l+1)
-            A_H_bary = np.mean(np.stack(A_H_list, axis=0), axis=0)  # (d_h, d_h+1)
-            W_L_bary, b_L_bary = A_L_bary[:, :d_l], A_L_bary[:, d_l:d_l+1]
-            W_H_bary, b_H_bary = A_H_bary[:, :d_h], A_H_bary[:, d_h:d_h+1]
-
-        # ---------- 2. Build TRAIN-aligned buckets (U's) ----------
+        # Build aligned TRAIN buckets (keyed by iota, HL stored under same iota)
         (det_ll_t, det_hl_t, noise_ll_t, noise_hl_t,
-         slice_map_ll, slice_map_hl, tot_n_ll, _) = build_fold_aligned_buckets(
+         slice_map_ll, slice_map_hl, tot_n_ll, tot_n_hl) = build_fold_aligned_buckets(
             det_ll=det_ll_all, det_hl=det_hl_all,
             noise_ll=noise_ll_all, noise_hl=noise_hl_all,
             row_idx_ll=row_idx_ll, row_idx_hl=row_idx_hl,
             omega=omega, train_idx=train_idx
         )
 
-        # ---------- 3. Barycentric LL/HL data from aligned U's ----------
-        X_L_list, X_H_list = [], []
-
-        for iota, Ul_t in noise_ll_t.items():
-            eta = omega.get(iota, None)
-            if eta is None:
-                continue
-            Uh_t = noise_hl_t.get(iota, None)  # keyed by iota to stay aligned
-            if Uh_t is None:
-                continue
-
-            Ul_np = Ul_t.detach().cpu().numpy()  # (n, d_l)
-            Uh_np = Uh_t.detach().cpu().numpy()  # (n, d_h)
-
-            # Barycentric "deterministic" samples:
-            # W_*: (d_*, d_*), U_*^T: (d_*, n), b_*: (d_*, 1)
-            Xl = W_L_bary @ Ul_np.T + b_L_bary        # (d_l, n)
-            Xh = W_H_bary @ Uh_np.T + b_H_bary        # (d_h, n)
-
-            X_L_list.append(Xl)
-            X_H_list.append(Xh)
-
-        if not X_L_list or not X_H_list or tot_n_ll == 0:
-            logger.warning(f"[BaryCA] Fold {k}: no aligned TRAIN samples; returning zeros for T.")
+        if tot_n_ll == 0 or tot_n_hl == 0:
+            logger.warning(f"[BaryCA] Fold {fold_id}: no aligned TRAIN samples; using zero T.")
             Tmat = np.zeros((d_h, d_l))
-        else:
-            # Concatenate across all aligned buckets for this fold
-            X_L_bary = np.concatenate(X_L_list, axis=1)  # (d_l, N_train_aligned)
-            X_H_bary = np.concatenate(X_H_list, axis=1)  # (d_h, N_train_aligned)
+            results[f"fold_{fold_id}"] = {
+                "seed": seed_fold, "T": Tmat,
+                "train_N": 0, "test_N": len(fold["test"]),
+            }
+            continue
 
-            # ---------- 4. Solve regularized least squares via Gram matrix ----------
-            #   T = X_H X_L^T (X_L X_L^T + λI)^{-1}
-            try:
-                G = X_L_bary @ X_L_bary.T  # (d_l, d_l) Gram matrix
-                G_reg = G + regularization * np.eye(d_l)
-                C = X_H_bary @ X_L_bary.T  # (d_h, d_l) cross-covariance
-                Tmat = (C @ np.linalg.pinv(G_reg)).astype(np.float64)
-            except np.linalg.LinAlgError:
-                logger.warning(f"[BaryCA] Fold {k}: pinv failed; using zero T.")
-                Tmat = np.zeros((d_h, d_l))
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        results[f"fold_{k}"] = {
-            "seed": int(fold.get("seed", 0)),
+        # LUCAS-style: optimize T on barycentric objective
+        T = torch.randn(d_h, d_l, requires_grad=True, device=device)
+        opt = torch.optim.Adam([T], lr=lr)
+
+        prev = float("inf")
+        for it in tqdm(range(max_iter), desc="BaryCA (LUCAS-style) Optimization"):
+            opt.zero_grad()
+            loss = barycentric_objective_battery_lucas_style(
+                T, det_ll_t, det_hl_t, noise_ll_t, noise_hl_t
+            )
+            if torch.isnan(loss):
+                logger.warning(f"[BaryCA] Fold {fold_id}: NaN loss, aborting.")
+                break
+            loss.backward()
+            opt.step()
+
+            cur = float(loss.item())
+            if abs(prev - cur) < tol:
+                logger.info(f"[BaryCA] Fold {fold_id}: converged at iter {it+1} (Δ<{tol}).")
+                break
+            prev = cur
+
+        Tmat = T.detach().cpu().numpy()
+
+        results[f"fold_{fold_id}"] = {
+            "seed": seed_fold,
             "T": Tmat,
             "train_N": int(tot_n_ll),
             "test_N": int(len(fold["test"])),
         }
 
-        logger.info(f"[BaryCA] Fold {k+1}/{len(saved_folds)} done "
+        logger.info(f"[BaryCA] Fold {fold_id+1}/{len(saved_folds)} done "
                     f"(train_N={tot_n_ll}, test_N={len(fold['test'])}).")
 
-    # ---------- Save results ----------
+    # Save results like the old script
     os.makedirs(output_config["save_directory"], exist_ok=True)
     output_path = os.path.join(
         output_config["save_directory"],
@@ -627,6 +601,199 @@ def run_baryca(all_data: Dict[str, Any], config: Dict[str, Any], saved_folds: Li
     joblib.dump(results, output_path)
     logger.info(f"BaryCA results saved to {output_path}")
     return results
+
+
+
+# the original BaryCA implementation good
+# def run_baryca(all_data: Dict[str, Any], config: Dict[str, Any], saved_folds: List[dict]) -> Dict[str, Any]:
+#     """
+#     Run BaryCA optimization with config-driven parameters.
+
+#     Overview per fold:
+#       1) For each intervention bucket (LL and HL), fit an affine map
+#          D ≈ A [U; 1] using only TRAIN rows (per fold).
+#       2) Average these A's over interventions to get barycentric operators
+#          A_L^{bary}, A_H^{bary} and decompose them into (W_L, b_L), (W_H, b_H).
+#       3) Use the TRAIN-aligned U's (via build_fold_aligned_buckets) and the
+#          barycentric operators to generate X_L^{bary}, X_H^{bary}.
+#       4) Solve a regularized least-squares problem
+#              X_H^{bary} ≈ T X_L^{bary}
+#          using the Gram matrix:
+#              G = X_L^{bary} X_L^{bary}^T,
+#              T = X_H^{bary} X_L^{bary}^T (G + λI)^{-1}.
+#     """
+#     opt_config = config["optimization"]
+#     output_config = config["output"]
+
+#     det_ll_all = all_data["LLmodel"].get("deterministic", {})
+#     det_hl_all = all_data["HLmodel"].get("deterministic", {})
+#     noise_ll_all = all_data["LLmodel"].get("noise", {})
+#     noise_hl_all = all_data["HLmodel"].get("noise", {})
+#     row_idx_ll = all_data["LLmodel"]["row_idx"]
+#     row_idx_hl = all_data["HLmodel"]["row_idx"]
+#     omega = all_data["abstraction_data"]["omega"]
+
+#     # dimensions
+#     d_l = next(iter(det_ll_all.values())).shape[1]
+#     d_h = next(iter(det_hl_all.values())).shape[1]
+
+#     regularization = opt_config.get("regularization", 1e-8)
+#     min_samples = opt_config.get("min_samples_per_intervention", 1)
+
+#     def fit_with_bias(U: np.ndarray, D: np.ndarray) -> np.ndarray:
+#         """
+#         Fit affine map D ≈ A [U; 1]:
+#           - U: (N, d_u)
+#           - D: (N, d_out)
+#           Returns A of shape (d_out, d_u + 1).
+#         """
+#         U = np.asarray(U, dtype=float)
+#         D = np.asarray(D, dtype=float)
+#         U_aug = np.concatenate([U, np.ones((U.shape[0], 1))], axis=1)  # (N, d_u + 1)
+#         # Solve D^T ≈ A U_aug^T  => A ∈ R^{d_out × (d_u+1)}
+#         return D.T @ np.linalg.pinv(U_aug.T)
+
+#     results = {}
+
+#     for k, fold in enumerate(saved_folds):
+#         train_idx = np.asarray(fold["train"], dtype=int)
+
+#         # ---------- 1. Per-intervention affine fits ON TRAIN ONLY ----------
+#         A_L_list, A_H_list = [], []
+
+#         # --- LL side ---
+#         for iota, Dl in det_ll_all.items():
+#             if not _is_bucket_key(iota):
+#                 continue
+#             Ul = noise_ll_all.get(iota, None)
+#             idx_global_ll = row_idx_ll.get(iota, None)
+#             if Ul is None or idx_global_ll is None:
+#                 continue
+
+#             # restrict to TRAIN rows
+#             mask_train = np.isin(idx_global_ll, train_idx)
+#             if not mask_train.any():
+#                 continue
+#             Dl_tr = np.asarray(Dl)[mask_train]
+#             Ul_tr = np.asarray(Ul)[mask_train]
+
+#             if (Dl_tr.shape[0] < min_samples) or (Ul_tr.shape[0] < min_samples):
+#                 continue
+
+#             try:
+#                 A_i = fit_with_bias(Ul_tr, Dl_tr)  # (d_l, d_l+1) if noise dim == d_l
+#                 if A_i.shape == (d_l, d_l + 1):
+#                     A_L_list.append(A_i)
+#             except np.linalg.LinAlgError:
+#                 continue
+
+#         # --- HL side ---
+#         for eta, Dh in det_hl_all.items():
+#             if not _is_bucket_key(eta):
+#                 continue
+#             Uh = noise_hl_all.get(eta, None)
+#             idx_global_hl = row_idx_hl.get(eta, None)
+#             if Uh is None or idx_global_hl is None:
+#                 continue
+
+#             # restrict to TRAIN rows
+#             mask_train = np.isin(idx_global_hl, train_idx)
+#             if not mask_train.any():
+#                 continue
+#             Dh_tr = np.asarray(Dh)[mask_train]
+#             Uh_tr = np.asarray(Uh)[mask_train]
+
+#             if (Dh_tr.shape[0] < min_samples) or (Uh_tr.shape[0] < min_samples):
+#                 continue
+
+#             try:
+#                 A_i = fit_with_bias(Uh_tr, Dh_tr)  # (d_h, d_h+1) if noise dim == d_h
+#                 if A_i.shape == (d_h, d_h + 1):
+#                     A_H_list.append(A_i)
+#             except np.linalg.LinAlgError:
+#                 continue
+
+#         # If we have no valid per-intervention fits, fall back to identity
+#         if not A_L_list or not A_H_list:
+#             logger.warning(f"[BaryCA] Fold {k}: not enough per-intervention fits; "
+#                            f"using identity+zero bias barycentric operators.")
+#             W_L_bary, b_L_bary = np.eye(d_l), np.zeros((d_l, 1))
+#             W_H_bary, b_H_bary = np.eye(d_h), np.zeros((d_h, 1))
+#         else:
+#             A_L_bary = np.mean(np.stack(A_L_list, axis=0), axis=0)  # (d_l, d_l+1)
+#             A_H_bary = np.mean(np.stack(A_H_list, axis=0), axis=0)  # (d_h, d_h+1)
+#             W_L_bary, b_L_bary = A_L_bary[:, :d_l], A_L_bary[:, d_l:d_l+1]
+#             W_H_bary, b_H_bary = A_H_bary[:, :d_h], A_H_bary[:, d_h:d_h+1]
+
+#         # ---------- 2. Build TRAIN-aligned buckets (U's) ----------
+#         (det_ll_t, det_hl_t, noise_ll_t, noise_hl_t,
+#          slice_map_ll, slice_map_hl, tot_n_ll, _) = build_fold_aligned_buckets(
+#             det_ll=det_ll_all, det_hl=det_hl_all,
+#             noise_ll=noise_ll_all, noise_hl=noise_hl_all,
+#             row_idx_ll=row_idx_ll, row_idx_hl=row_idx_hl,
+#             omega=omega, train_idx=train_idx
+#         )
+
+#         # ---------- 3. Barycentric LL/HL data from aligned U's ----------
+#         X_L_list, X_H_list = [], []
+
+#         for iota, Ul_t in noise_ll_t.items():
+#             eta = omega.get(iota, None)
+#             if eta is None:
+#                 continue
+#             Uh_t = noise_hl_t.get(iota, None)  # keyed by iota to stay aligned
+#             if Uh_t is None:
+#                 continue
+
+#             Ul_np = Ul_t.detach().cpu().numpy()  # (n, d_l)
+#             Uh_np = Uh_t.detach().cpu().numpy()  # (n, d_h)
+
+#             # Barycentric "deterministic" samples:
+#             # W_*: (d_*, d_*), U_*^T: (d_*, n), b_*: (d_*, 1)
+#             Xl = W_L_bary @ Ul_np.T + b_L_bary        # (d_l, n)
+#             Xh = W_H_bary @ Uh_np.T + b_H_bary        # (d_h, n)
+
+#             X_L_list.append(Xl)
+#             X_H_list.append(Xh)
+
+#         if not X_L_list or not X_H_list or tot_n_ll == 0:
+#             logger.warning(f"[BaryCA] Fold {k}: no aligned TRAIN samples; returning zeros for T.")
+#             Tmat = np.zeros((d_h, d_l))
+#         else:
+#             # Concatenate across all aligned buckets for this fold
+#             X_L_bary = np.concatenate(X_L_list, axis=1)  # (d_l, N_train_aligned)
+#             X_H_bary = np.concatenate(X_H_list, axis=1)  # (d_h, N_train_aligned)
+
+#             # ---------- 4. Solve regularized least squares via Gram matrix ----------
+#             #   T = X_H X_L^T (X_L X_L^T + λI)^{-1}
+#             try:
+#                 G = X_L_bary @ X_L_bary.T  # (d_l, d_l) Gram matrix
+#                 G_reg = G + regularization * np.eye(d_l)
+#                 C = X_H_bary @ X_L_bary.T  # (d_h, d_l) cross-covariance
+#                 Tmat = (C @ np.linalg.pinv(G_reg)).astype(np.float64)
+#             except np.linalg.LinAlgError:
+#                 logger.warning(f"[BaryCA] Fold {k}: pinv failed; using zero T.")
+#                 Tmat = np.zeros((d_h, d_l))
+
+#         results[f"fold_{k}"] = {
+#             "seed": int(fold.get("seed", 0)),
+#             "T": Tmat,
+#             "train_N": int(tot_n_ll),
+#             "test_N": int(len(fold["test"])),
+#         }
+
+#         logger.info(f"[BaryCA] Fold {k+1}/{len(saved_folds)} done "
+#                     f"(train_N={tot_n_ll}, test_N={len(fold['test'])}).")
+
+#     # ---------- Save results ----------
+#     os.makedirs(output_config["save_directory"], exist_ok=True)
+#     output_path = os.path.join(
+#         output_config["save_directory"],
+#         f"{output_config['filename_prefix']}.pkl"
+#     )
+#     joblib.dump(results, output_path)
+#     logger.info(f"BaryCA results saved to {output_path}")
+#     return results
 
 
 # def run_baryca(all_data: Dict[str, Any], config: Dict[str, Any], saved_folds: List[dict]) -> Dict[str, Any]:

@@ -1,0 +1,20 @@
+# Abs-LiNGAM Baseline Configuration for LUCAS Data
+method: "abslingam"
+enabled: true
+description: "Abs-LiNGAM baselines on observational LUCAS data"
+
+data:
+  data_path: "data/lucas/lucas_pack.pkl"
+  experiment: "lucas"
+
+optimization:
+  tau_perfect: 0.01  # threshold for Perfect abstraction mask
+  tau_noisy: 0.1     # threshold for Noisy abstraction mask
+
+cv:
+  k_folds: 5
+  seed: 23
+
+output:
+  save_directory: "data/lucas/results_nonlinear"
+  filename_prefix: "abslingam_cv_results_empirical"

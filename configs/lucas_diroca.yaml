@@ -1,0 +1,38 @@
+# DiRoCA Optimization Configuration for LUCAS Data
+method: "diroca"
+enabled: true
+description: "DiRoCA on non-linear LUCAS with global adversary and radius sweep"
+
+data:
+  data_path: "data/lucas/lucas_pack.pkl"
+  experiment: "lucas"
+  out_dir_note: "Used only for documentation; actual output dir in 'output'."
+
+optimization:
+  eta_min: 0.001           # learning rate for T
+  eta_max: 0.001           # learning rate for adversaries Θ,Φ
+  num_steps_min: 5         # steps per T update
+  num_steps_max: 2         # steps per adversary update
+  max_iter: 5000
+  tol: 0.0001
+  initialization: "random" # "zeros" or "random"
+  gain: 0.0                # Xavier gain (0.0 = no Xavier)
+  optimizers: "adam"       # "adam" or "adam_betas"
+
+radius_sweep:
+  # For LUCAS, we start with explicit radii.
+  use_theoretical_bounds: false
+  pairs:
+    - [0.5, 0.5]
+    - [1.0, 1.0]
+    - [2.0, 2.0]
+    - [4.0, 4.0]
+    - [8.0, 8.0]
+
+cv:
+  k_folds: 5
+  seed: 23
+
+output:
+  save_directory: "data/lucas/results_nonlinear"
+  filename_prefix: "diroca_cv_results_empirical"
