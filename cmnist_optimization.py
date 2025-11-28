@@ -1266,7 +1266,7 @@ def train_diroca_single_run(
             monitors[fold_key] = None
 
         # NOTE: keep this break if you only want fold_0 for quick experiments
-        break
+        # break
 
     print("\nDiRoCA Training complete.")
     return {"diroca": diroca_training_results}, monitors
@@ -1348,7 +1348,7 @@ def train_gradca_single_run(
             gradca_training_results[fold_key] = {"error": str(e)}
             monitors[fold_key] = None
 
-        break
+        # break
 
     print("\nGradCA Training complete.")
     return {"gradca": gradca_training_results}, monitors
@@ -1420,7 +1420,7 @@ def train_baryca_single_run(
             baryca_training_results[fold_key] = {"error": str(e)}
             monitors[fold_key] = None
 
-        break
+        # break
 
     print("\nBaryCA Training complete.")
     return {"baryca": baryca_training_results}, monitors
@@ -1512,7 +1512,7 @@ def train_abslingam_single_run(
             print(f"  ✗ ERROR during Abs-LiNGAM for Fold {i+1}: {e}")
             abslingam_training_results[fold_key] = {"error": str(e)}
 
-        break
+        # break
 
     print("\nAbs-LiNGAM Training finished.")
     return {"abslingam": abslingam_training_results}
@@ -1713,7 +1713,7 @@ def main(args):
     eps_emp = compute_empirical_radius(N_emp)
     print(f"Computed empirical radius eps_emp = {eps_emp:.6f} using N={N_emp}")
 
-    eps_list = [0.5, 1.0, 2.0, 4.0, 8.0, eps_emp, 20, 40, 100]
+    eps_list = [8.0, eps_emp, 20, 40]
     radius_combinations = [(eps, 0.0) for eps in eps_list]
 
     print(f"OPT view active: sweeping ε over {eps_list}, always using δ=0.0")
