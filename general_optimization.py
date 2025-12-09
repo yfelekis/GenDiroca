@@ -579,7 +579,7 @@ def main():
                     num_steps_min=opt_cfg.get('num_steps_min', 1),
                     num_steps_max=0,
                     max_iter=opt_cfg.get('max_iter', 5000),
-                    tol=opt_cfg.get('tol', 1e-5),
+                    tol=opt_cfg.get('tol', 1e-6),
                     seed=seed,
                     robust_L=False, robust_H=False,
                     initialization=opt_cfg.get('initialization', 'zeros'),

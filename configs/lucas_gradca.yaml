@@ -8,10 +8,10 @@ data:
   experiment: "lucas"
 
 optimization:
-  eta_min: 0.001          # learning rate for T
+  eta_min: 0.001          # learning rate for T 
   max_iter: 5000
   num_steps_min: 1        # often 1 is fine for non-robust
-  tol: 0.00001
+  tol: 0.0001             #0.00001            
   initialization: "zeros" # good default for GradCA
   gain: 0.0
   optimizers: "adam"
