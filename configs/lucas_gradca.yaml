@@ -1,18 +1,18 @@
-# GradCA Optimization Configuration for LUCAS Data
+# configs/lucas_gradca.yaml
 method: "gradca"
 enabled: true
-description: "Non-robust GradCA on non-linear LUCAS"
+description: "Optimized GradCA on non-linear LUCAS"
 
 data:
   data_path: "data/lucas/lucas_pack.pkl"
   experiment: "lucas"
 
 optimization:
-  eta_min: 0.001          # learning rate for T 
+  eta_min: 0.01           # UPDATED: Key to getting ~2.42 error
   max_iter: 5000
-  num_steps_min: 1        # often 1 is fine for non-robust
-  tol: 0.0001             #0.00001            
-  initialization: "zeros" # good default for GradCA
+  num_steps_min: 1
+  tol: 0.000001           # UPDATED: Stricter tolerance
+  initialization: "zeros" # For adversary; code handles T
   gain: 0.0
   optimizers: "adam"
 

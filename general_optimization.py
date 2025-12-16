@@ -1,68 +1,33 @@
 #!/usr/bin/env python3
 """
-Config-driven optimization for LUCAS-style packs
-------------------------------------------------
-
+Config-driven optimization for LUCAS-style packs (general_optimization.py)
+--------------------------------------------------------------------------
 Works with the output of lucas_nonlinear_generator.py.
-
-Pack format (joblib):
-  {
-    'T': (3x6) np.ndarray,
-    'omega': dict[str->str],
-    'll': { iota: {'X','D','U'} with arrays (N,6) },
-    'hl': { eta: {'X','D','U'} with arrays (N,3) },
-    'hl_model': {...},
-    'graphs': {...}
-  }
-
-This script:
-  * Loads per-method YAML configs based on the experiment name.
-  * For each enabled method (DiRoCA, GradCA, BaryCA, Abs-LiNGAM):
-      - Loads data (once per data_path).
-      - Builds K-fold splits (per method, from config).
-      - Runs the corresponding optimization / baseline.
-      - Saves CV results to the configured output directory.
+Reads hyperparameters from YAML configs in the 'configs/' directory.
+Allows CLI overrides for quick testing.
 
 Usage:
-  python non_linear_optimization.py --experiment lucas
-
-Later, you can reuse the same script with a different experiment by
-adding new configs `<experiment>_diroca.yaml`, etc., plus a loader
-for that experiment in `load_pack_for_experiment`.
+  python general_optimization.py --experiment lucas --config-dir configs
 """
 
 import os
 import argparse
 import joblib
 import numpy as np
+import yaml
 from tqdm import tqdm
 from sklearn.model_selection import KFold
 
 import torch
-import torch.nn as nn  # noqa: F401  (kept for possible extensions)
+import torch.nn as nn
 import torch.optim as optim
 import torch.nn.init as init
-
-import yaml
-
 
 # ----------------------------- Data loading ------------------------------
 
 def load_lucas_pack(path):
-    """
-    Loader specific to the LUCAS pack from lucas_nonlinear_generator.py.
-
-    Returns a dict with:
-      - T_ref: (h,l)
-      - omega: dict
-      - det_ll_dict: iota -> D_ll (N,l)
-      - det_hl_dict: eta  -> D_hl (N,h)
-      - U_ll_hat: (N,l) observational LL noise
-      - U_hl_hat: (N,h) observational HL noise
-      - N, l, h
-    """
+    print(f"[DATA] Loading {path}...")
     pack = joblib.load(path)
-    # Basic integrity checks
     required_top = ['T', 'omega', 'll', 'hl']
     for k in required_top:
         if k not in pack:
@@ -70,54 +35,32 @@ def load_lucas_pack(path):
 
     if 'iota0' not in pack['ll']:
         raise KeyError("ll['iota0'] (observational) missing in pack.ll")
+    
     eta_obs = pack['omega'].get('iota0', 'eta0')
     if eta_obs not in pack['hl']:
-        # fallback to 'eta0' if provided
         if 'eta0' in pack['hl']:
             eta_obs = 'eta0'
         else:
-            raise KeyError("No observational HL found (expected omega['iota0'] or 'eta0')")
+            raise KeyError("No observational HL found")
 
-    # Deterministic parts
     det_ll_dict = {iota: v['D'] for iota, v in pack['ll'].items()}
     det_hl_dict = {eta: v['D'] for eta, v in pack['hl'].items()}
 
-    # Noise anchors from observational splits
-    U_ll_hat = pack['ll']['iota0']['U']        # (N,l)
-    U_hl_hat = pack['hl'][eta_obs]['U']        # (N,h)
+    U_ll_hat = pack['ll']['iota0']['U']
+    U_hl_hat = pack['hl'][eta_obs]['U']
 
     N, l = U_ll_hat.shape
     _, h = U_hl_hat.shape
-
-    omega = pack['omega']
-    T_ref = pack['T']
-
+    
     return {
-        'T_ref': T_ref,
-        'omega': omega,
+        'T_ref': pack['T'],
+        'omega': pack['omega'],
         'det_ll_dict': det_ll_dict,
         'det_hl_dict': det_hl_dict,
         'U_ll_hat': U_ll_hat,
         'U_hl_hat': U_hl_hat,
-        'N': N,
-        'l': l,
-        'h': h
+        'N': N, 'l': l, 'h': h
     }
-
-
-def load_pack_for_experiment(experiment: str, data_path: str):
-    """
-    Dispatcher for different experiments. Currently only 'lucas' is supported.
-    Extend this with new loaders for other datasets.
-    """
-    if experiment.lower() == 'lucas':
-        return load_lucas_pack(data_path)
-    else:
-        raise NotImplementedError(
-            f"No loader implemented for experiment '{experiment}'. "
-            "Please add a corresponding load_*_pack function."
-        )
-
 
 def prepare_cv_folds_from_N(N, k_folds=5, seed=23):
     kf = KFold(n_splits=k_folds, shuffle=True, random_state=seed)
@@ -126,8 +69,7 @@ def prepare_cv_folds_from_N(N, k_folds=5, seed=23):
         folds.append({'train': train_idx, 'test': test_idx})
     return folds
 
-
-# ----------------------------- helpers ----------------------------------
+# ----------------------------- Optimization Logic ------------------------
 
 def project_onto_frobenius_ball(tensor, radius_limit):
     """Project tensor onto Frobenius norm ball ||X||_F <= radius_limit."""
@@ -137,40 +79,29 @@ def project_onto_frobenius_ball(tensor, radius_limit):
             tensor.mul_(radius_limit / (cur + 1e-12))
     return tensor
 
-
-def compute_empirical_radius(N, eta=0.05, c1=1000.0, c2=1.0, alpha=2.0, m=1):
-    """
-    Simple (light-tail) empirical radius proxy, dimension-aware.
-    """
-    if N <= 1:
-        return 0.0
+def compute_empirical_radius(N, eta=0.05, c1=10.0, c2=1.0, alpha=2.0, m=1):
+    if N <= 1: return 0.0
     term1 = c1 * (np.log(max(N, 2)) / N) ** (1 / alpha)
     term2 = c2 * np.sqrt(m * np.log(1 / eta) / N)
     return float(term1 + term2)
 
-
-# ----------------------------- objectives --------------------------------
-
-def empirical_objective(T, U_ll, U_hl, Theta_ll, Phi_hl,
-                        det_ll_dict, det_hl_dict, omega):
-    """
-    Average over interventions of Frobenius norm between mapped LL and HL:
-    loss = (1/|I|) sum_i || T (D_ll^i + U_ll + Theta) - (D_hl^{omega(i)} + U_hl + Phi) ||_F^2 / N
-    """
+def empirical_objective(T, U_ll, U_hl, Theta_ll, Phi_hl, det_ll_dict, det_hl_dict, omega):
     device = T.device
-    U_ll = U_ll.to(device)
-    U_hl = U_hl.to(device)
-    Theta_ll = Theta_ll.to(device)
-    Phi_hl = Phi_hl.to(device)
-
-    N = U_ll.shape[0]
-    loss_total = torch.tensor(0.0, device=device)
+    # FIX: Explicit float32 casting
+    U_ll = U_ll.to(device, dtype=torch.float32)
+    U_hl = U_hl.to(device, dtype=torch.float32)
+    Theta_ll = Theta_ll.to(device, dtype=torch.float32)
+    Phi_hl = Phi_hl.to(device, dtype=torch.float32)
+    
+    loss_total = torch.tensor(0.0, device=device, dtype=torch.float32)
     count = 0
+    N = U_ll.shape[0]
+
     for iota, eta in omega.items():
-        if iota not in det_ll_dict or eta not in det_hl_dict:
-            continue
-        Dll = torch.as_tensor(det_ll_dict[iota], dtype=torch.float32, device=device)  # (N,l)
-        Dhl = torch.as_tensor(det_hl_dict[eta],  dtype=torch.float32, device=device)  # (N,h)
+        if iota not in det_ll_dict or eta not in det_hl_dict: continue
+        
+        Dll = torch.as_tensor(det_ll_dict[iota], device=device, dtype=torch.float32)
+        Dhl = torch.as_tensor(det_hl_dict[eta],  device=device, dtype=torch.float32)
 
         endo_ll = Dll + U_ll + Theta_ll
         endo_hl = Dhl + U_hl + Phi_hl
@@ -178,503 +109,293 @@ def empirical_objective(T, U_ll, U_hl, Theta_ll, Phi_hl,
         diff = (T @ endo_ll.T).T - endo_hl
         loss_total += torch.norm(diff, p='fro')**2 / max(1, N)
         count += 1
-    if count == 0:
-        return torch.tensor(0.0, device=device)
-    return loss_total / count
+        
+    return loss_total / max(1, count)
 
+def run_minmax_optimization(U_L, U_H, det_ll, det_hl, omega, config, epsilon, delta):
+    seed = config['cv'].get('seed', 23)
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    opt_cfg = config['optimization']
+    l_full, h_full = U_L.shape[1], U_H.shape[1]
+    
+    # Init T
+    # ALWAYS init random first to break symmetry
+    T = torch.randn(h_full, l_full, requires_grad=True, device=device, dtype=torch.float32)
+    
+    # Apply Xavier gain if specified
+    if opt_cfg.get('gain', 0.0) > 0:
+        init.xavier_normal_(T, gain=opt_cfg['gain'])
+    
+    # Init Adversaries
+    robust = (epsilon > 0 or delta > 0)
+    method_label = 'DiRoCA' if robust else 'GradCA'
+    
+    # Initialization config strictly applies to Adversaries (Theta), NOT T
+    init_type = opt_cfg.get('initialization', 'random')
+    
+    # GradCA (robust=False) -> Theta/Phi remain 0 (Nominal Objective)
+    # DiRoCA (robust=True)  -> Theta/Phi can be random or 0
+    if init_type == 'zeros':
+        Theta = torch.zeros_like(torch.as_tensor(U_L), requires_grad=robust, device=device, dtype=torch.float32)
+        Phi = torch.zeros_like(torch.as_tensor(U_H), requires_grad=robust, device=device, dtype=torch.float32)
+    else:
+        # Default to random for DiRoCA
+        Theta = torch.randn_like(torch.as_tensor(U_L), requires_grad=robust, device=device, dtype=torch.float32)
+        Phi = torch.randn_like(torch.as_tensor(U_H), requires_grad=robust, device=device, dtype=torch.float32)
 
-def barycentric_objective(T, U_ll, U_hl, det_ll_dict, det_hl_dict, omega):
-    """
-    BaryCA: compute average deterministic parts across interventions, then
-    add shared U_ll, U_hl from the training subset, and fit T to map averages.
-    """
-    device = T.device
-    U_ll = U_ll.to(device)
-    U_hl = U_hl.to(device)
+    # Debug print for GradCA to confirm params
+    if not robust:
+        print(f"DEBUG: GradCA Running with eta={opt_cfg['eta_min']}, tol={opt_cfg['tol']}, gain={opt_cfg.get('gain', 0.0)}")
 
-    ll_list = []
-    hl_list = []
-    for iota, eta in omega.items():
-        if iota in det_ll_dict and eta in det_hl_dict:
-            ll_list.append(torch.as_tensor(det_ll_dict[iota], dtype=torch.float32, device=device))
-            hl_list.append(torch.as_tensor(det_hl_dict[eta],  dtype=torch.float32, device=device))
-    if not ll_list:
-        return torch.tensor(0.0, device=device)
+    # Optimizers
+    opt_T = optim.Adam([T], lr=opt_cfg['eta_min'])
+    opt_adv = None
+    if robust:
+        opt_adv = optim.Adam([Theta, Phi], lr=opt_cfg.get('eta_max', 0.001))
 
-    avg_Dll = torch.mean(torch.stack(ll_list, dim=0), dim=0)  # (N,l)
-    avg_Dhl = torch.mean(torch.stack(hl_list, dim=0), dim=0)  # (N,h)
+    # Loop
+    U_L_t = torch.as_tensor(U_L, dtype=torch.float32, device=device)
+    U_H_t = torch.as_tensor(U_H, dtype=torch.float32, device=device)
+    N = U_L.shape[0]
+    prev_obj = float('inf')
 
-    endo_ll = avg_Dll + U_ll
-    endo_hl = avg_Dhl + U_hl
+    desc = f"{method_label}"
+    if robust:
+        desc += f"(e={epsilon},d={delta})"
+        
+    iterator = tqdm(range(opt_cfg['max_iter']), desc=desc, leave=False)
+    
+    for it in iterator:
+        # Min Step
+        for _ in range(opt_cfg.get('num_steps_min', 1)):
+            opt_T.zero_grad()
+            loss = empirical_objective(T, U_L_t, U_H_t, Theta.detach(), Phi.detach(), det_ll, det_hl, omega)
+            if torch.isnan(loss): break
+            loss.backward()
+            opt_T.step()
+            
+        # Max Step
+        if robust:
+            for _ in range(opt_cfg.get('num_steps_max', 1)):
+                opt_adv.zero_grad()
+                loss_adv = -empirical_objective(T.detach(), U_L_t, U_H_t, Theta, Phi, det_ll, det_hl, omega)
+                loss_adv.backward()
+                opt_adv.step()
+                if epsilon > 0: project_onto_frobenius_ball(Theta, epsilon * np.sqrt(N))
+                if delta > 0: project_onto_frobenius_ball(Phi, delta * np.sqrt(N))
 
-    N = endo_ll.shape[0]
-    diff = (T @ endo_ll.T).T - endo_hl
-    return torch.norm(diff, p='fro')**2 / max(1, N)
-
-
-# ----------------------------- Abs-LiNGAM (baseline) --------------------
-
-def perfect_abstraction(px_samples, py_samples, tau_threshold=1e-2):
-    T_raw = np.linalg.pinv(px_samples) @ py_samples  # (d_l, d_h)
-    mask = (np.abs(T_raw) > tau_threshold).astype(px_samples.dtype)
-    return T_raw * mask
-
-
-def noisy_abstraction(px_samples, py_samples, tau_threshold=1e-1, refit_coeff=False):
-    T_hat = np.linalg.pinv(px_samples) @ py_samples  # (d_l, d_h)
-    idx = np.argmax(np.abs(T_hat), axis=1)           # (d_l,)
-    onehot = np.eye(py_samples.shape[1])[idx]        # (d_l, d_h)
-    onehot *= (np.abs(T_hat) > tau_threshold).astype(int)
-    T_masked = onehot * T_hat
-    # optional refit
-    if refit_coeff:
-        T_refit = T_masked.copy()
-        for y in range(onehot.shape[1]):
-            block = np.where(onehot[:, y] == 1)[0]
-            if len(block) > 0:
-                T_block = np.linalg.pinv(px_samples[:, block]) @ py_samples[:, y]
-                T_refit[block, y] = T_block
-        return T_refit
-    return T_masked
-
-
-def run_abs_lingam(X_ll_obs, X_hl_obs, tau_perfect=1e-2, tau_noisy=1e-1):
-    # Shapes: (N, d_l) and (N, d_h)
-    T_perfect = perfect_abstraction(X_ll_obs, X_hl_obs, tau_threshold=tau_perfect).T.astype(np.float32)
-    T_noisy   = noisy_abstraction(X_ll_obs,   X_hl_obs, tau_threshold=tau_noisy, refit_coeff=False).T.astype(np.float32)
+        curr = float(loss.item())
+        if abs(prev_obj - curr) < opt_cfg['tol']:
+            iterator.set_postfix(status=f"Cvgd {it}")
+            break
+        prev_obj = curr
+        
     return {
-        'Perfect': {'T': T_perfect},
-        'Noisy':   {'T': T_noisy}
+        'T_matrix': T.detach().cpu().numpy().astype(np.float32),
+        'opt_params': {'eps': epsilon, 'delta': delta}
     }
 
+# ----------------------------- Baselines --------------------------------
 
-# ----------------------------- Core trainers -----------------------------
-
-def run_empirical_minmax(U_L, U_H, det_ll_dict, det_hl_dict, omega,
-                         epsilon, delta,
-                         eta_min, eta_max,
-                         num_steps_min, num_steps_max,
-                         max_iter, tol, seed,
-                         robust_L, robust_H,
-                         initialization, gain, optimizers):
-    """
-    Core loop for DiRoCA (robust) / GradCA (non-robust) on a generic pack.
-    """
+def run_baryca(U_L, U_H, det_ll, det_hl, omega, config):
+    seed = config['cv'].get('seed', 23)
     torch.manual_seed(seed)
-    np.random.seed(seed)
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    # T dimensions: map d_l -> d_h (so T is (d_h, d_l))
-    l_full = U_L.shape[1]
-    h_full = U_H.shape[1]
-    T = torch.randn(h_full, l_full, requires_grad=True, device=device)
-    if gain > 0:
-        init.xavier_normal_(T, gain=gain)
-
-    U_L = torch.as_tensor(U_L, dtype=torch.float32, device=device)
-    U_H = torch.as_tensor(U_H, dtype=torch.float32, device=device)
-
-    method = 'diroca' if (robust_L or robust_H) else 'gradca'
-
-    # perturbations
-    if initialization == 'zeros':
-        Theta = torch.zeros_like(U_L, requires_grad=(method == 'diroca'), device=device)
-        Phi   = torch.zeros_like(U_H, requires_grad=(method == 'diroca'), device=device)
-    elif initialization == 'random':
-        Theta = torch.randn_like(U_L, requires_grad=(method == 'diroca'), device=device)
-        Phi   = torch.randn_like(U_H, requires_grad=(method == 'diroca'), device=device)
-    else:
-        raise ValueError(f"Unknown initialization: {initialization}")
-
-    # optimizers
-    if optimizers == 'adam':
-        opt_T = optim.Adam([T], lr=eta_min)
-        opt_max = optim.Adam([Theta, Phi], lr=eta_max) if method == 'diroca' else None
-    elif optimizers == 'adam_betas':
-        opt_T = optim.Adam([T], lr=eta_min, betas=(0.9, 0.999), eps=1e-8, amsgrad=True)
-        opt_max = optim.Adam([Theta, Phi], lr=eta_max, betas=(0.9, 0.999),
-                             eps=1e-8, amsgrad=True) if method == 'diroca' else None
-    else:
-        raise ValueError(f"Unknown optimizer: {optimizers}")
-
-    prev_T_obj = float('inf')
-    N = U_L.shape[0]
-
-    for it in tqdm(range(max_iter), desc=f"{method.upper()} Optimization"):
-        # Min step(s) on T (Θ,Φ detached)
-        for _ in range(num_steps_min):
-            opt_T.zero_grad()
-            T_obj = empirical_objective(T, U_L, U_H, Theta.detach(), Phi.detach(),
-                                        det_ll_dict, det_hl_dict, omega)
-            if torch.isnan(T_obj):
-                break
-            T_obj.backward()
-            opt_T.step()
-
-        # Max step(s) on Theta,Phi if robust
-        if method == 'diroca':
-            for _ in range(num_steps_max):
-                opt_max.zero_grad()
-                max_obj = -empirical_objective(T.detach(), U_L, U_H, Theta, Phi,
-                                               det_ll_dict, det_hl_dict, omega)
-                if torch.isnan(max_obj):
-                    break
-                max_obj.backward()
-                opt_max.step()
-
-                # Project onto balls ||Theta||_F <= sqrt(N)*ε, ||Phi||_F <= sqrt(N)*δ
-                if epsilon > 0:
-                    project_onto_frobenius_ball(Theta, epsilon * np.sqrt(N))
-                if delta > 0:
-                    project_onto_frobenius_ball(Phi,   delta * np.sqrt(N))
-
-        cur = float(T_obj.item())
-        if abs(prev_T_obj - cur) < tol:
-            print(f"{method.upper()} converged at iter {it+1} (Δobj<{tol}).")
-            break
-        prev_T_obj = cur
-
-    T_final = T.detach().cpu().numpy().astype(np.float32)
-    paramsL = {'pert_U': Theta.detach().cpu().numpy().astype(np.float32),
-               'radius': epsilon}
-    paramsH = {'pert_U': Phi.detach().cpu().numpy().astype(np.float32),
-               'radius': delta}
-    return {'L': paramsL, 'H': paramsH}, T_final
-
-
-def run_bary_optim(U_ll_hat, U_hl_hat, det_ll_dict, det_hl_dict, omega,
-                   lr=1e-3, max_iter=3000, tol=1e-5, seed=42):
-    """
-    Optimize T on the barycentric objective.
-    """
-    torch.manual_seed(seed)
-    np.random.seed(seed)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    U_ll_hat = torch.as_tensor(U_ll_hat, dtype=torch.float32, device=device)
-    U_hl_hat = torch.as_tensor(U_hl_hat, dtype=torch.float32, device=device)
-
-    h_full, l_full = U_hl_hat.shape[1], U_ll_hat.shape[1]
-    T = torch.randn(h_full, l_full, requires_grad=True, device=device)
-    opt = optim.Adam([T], lr=lr)
-
+    opt_cfg = config['optimization']
+    
+    U_L_t = torch.as_tensor(U_L, dtype=torch.float32, device=device)
+    U_H_t = torch.as_tensor(U_H, dtype=torch.float32, device=device)
+    
+    ll_list, hl_list = [], []
+    for iota, eta in omega.items():
+        if iota in det_ll and eta in det_hl:
+            ll_list.append(torch.as_tensor(det_ll[iota], dtype=torch.float32, device=device))
+            hl_list.append(torch.as_tensor(det_hl[eta], dtype=torch.float32, device=device))
+            
+    avg_Dll = torch.mean(torch.stack(ll_list), dim=0)
+    avg_Dhl = torch.mean(torch.stack(hl_list), dim=0)
+    
+    endo_ll = avg_Dll + U_L_t
+    endo_hl = avg_Dhl + U_H_t
+    N = endo_ll.shape[0]
+    
+    T = torch.randn(U_H.shape[1], U_L.shape[1], requires_grad=True, device=device)
+    optimizer = optim.Adam([T], lr=opt_cfg.get('lr', 0.001))
+    
     prev = float('inf')
-    for it in tqdm(range(max_iter), desc="BaryCA Optimization"):
-        opt.zero_grad()
-        loss = barycentric_objective(T, U_ll_hat, U_hl_hat, det_ll_dict, det_hl_dict, omega)
-        if torch.isnan(loss):
-            break
+    iterator = tqdm(range(opt_cfg['max_iter']), desc="BaryCA Optimization", leave=False)
+    
+    for it in iterator:
+        optimizer.zero_grad()
+        diff = (T @ endo_ll.T).T - endo_hl
+        loss = torch.norm(diff, p='fro')**2 / max(1, N)
         loss.backward()
-        opt.step()
-        cur = float(loss.item())
-        if abs(prev - cur) < tol:
-            print(f"BaryCA converged at iter {it+1} (Δ<{tol}).")
+        optimizer.step()
+        
+        curr = float(loss.item())
+        if abs(prev - curr) < opt_cfg['tol']:
+            iterator.set_postfix(status=f"Converged iter {it}")
             break
-        prev = cur
+        prev = curr
+        
+    return {'T_matrix': T.detach().cpu().numpy().astype(np.float32)}
 
-    return T.detach().cpu().numpy().astype(np.float32)
+def run_abs_lingam(U_ll_obs, U_hl_obs, config):
+    opt_cfg = config['optimization']
+    # Perfect
+    T_raw = np.linalg.pinv(U_ll_obs) @ U_hl_obs
+    mask = (np.abs(T_raw) > opt_cfg['tau_perfect']).astype(np.float32)
+    T_perf = (T_raw * mask).T
+    
+    # Noisy
+    T_hat = np.linalg.pinv(U_ll_obs) @ U_hl_obs
+    idx = np.argmax(np.abs(T_hat), axis=1)
+    onehot = np.eye(U_hl_obs.shape[1])[idx]
+    onehot *= (np.abs(T_hat) > opt_cfg['tau_noisy']).astype(int)
+    T_noisy = (onehot * T_hat).T
 
+    return {
+        'Perfect': {'T_matrix': T_perf.astype(np.float32)},
+        'Noisy': {'T_matrix': T_noisy.astype(np.float32)} 
+    }
 
-# ----------------------------- Config helpers ---------------------------
+# ----------------------------- Main -------------------------------------
 
-def load_yaml_config(config_path: str):
-    if not os.path.exists(config_path):
-        print(f"[WARN] Config file not found: {config_path}. Skipping this method.")
-        return None
-    with open(config_path, 'r') as f:
-        return yaml.safe_load(f)
-
-
-def build_radius_pairs(config, N, l, h):
-    """
-    Build list of (eps, delta) pairs from config.
-
-    Supports two styles:
-      radius_sweep:
-        use_theoretical_bounds: true/false
-        theoretical_params: {eta,c1,c2,alpha}
-        additional_pairs: [ [eps,delta], ... ]
-
-    or
-
-      radius_sweep:
-        use_theoretical_bounds: false
-        pairs: [ [eps,delta], ... ]
-    """
-    rs_cfg = config.get("radius_sweep", {})
-    pairs = []
-
-    use_theoretical = rs_cfg.get("use_theoretical_bounds", False)
-    if use_theoretical:
-        tp = rs_cfg.get("theoretical_params", {})
-        eta = tp.get("eta", 0.05)
-        c1  = tp.get("c1", 1000.0)
-        c2  = tp.get("c2", 1.0)
-        alpha = tp.get("alpha", 2.0)
-        base_eps = round(compute_empirical_radius(N, eta=eta, c1=c1, c2=c2, alpha=alpha, m=l), 3)
-        base_del = round(compute_empirical_radius(N, eta=eta, c1=c1, c2=c2, alpha=alpha, m=h), 3)
-        pairs.append([base_eps, base_del])
-
-        addl = rs_cfg.get("additional_pairs", [])
-        pairs.extend(addl)
-    else:
-        direct_pairs = rs_cfg.get("pairs", [])
-        pairs.extend(direct_pairs)
-
-    if not pairs:
-        # Fallback
-        pairs = [[1.0, 1.0], [2.0, 2.0], [4.0, 4.0]]
-    return pairs
-
-
-# ----------------------------- Main orchestration -----------------------
+def load_yaml(path):
+    with open(path, 'r') as f: return yaml.safe_load(f)
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        '--experiment',
-        type=str,
-        default='lucas',
-        help='Experiment name (used to select configs and loader).'
-    )
-    parser.add_argument(
-        '--config-dir',
-        type=str,
-        default='configs',
-        help='Directory where <experiment>_<method>.yaml files live.'
-    )
+    parser.add_argument('--experiment', type=str, default='lucas')
+    parser.add_argument('--config-dir', type=str, default='configs')
+    
+    # --- OVERRIDE FLAGS ---
+    parser.add_argument('--gradca-max-iter', type=int, default=None)
+    parser.add_argument('--gradca-eta-min', type=float, default=None)
+    parser.add_argument('--gradca-tol', type=float, default=None)
+    parser.add_argument('--gradca-gain', type=float, default=None)  # <--- ADDED THIS FLAG
+    
+    parser.add_argument('--diroca-max-iter', type=int, default=None)
+    parser.add_argument('--baryca-max-iter', type=int, default=None)
+    
+    parser.add_argument('--skip-abslingam', action='store_true')
+    parser.add_argument('--skip-diroca', action='store_true')
+    parser.add_argument('--skip-gradca', action='store_true')
+    parser.add_argument('--skip-baryca', action='store_true')
+
     args = parser.parse_args()
-
-    experiment = args.experiment
-    config_dir = args.config_dir
-
+    
     methods = ['diroca', 'gradca', 'baryca', 'abslingam']
     configs = {}
-
-    print(f"[SETUP] Experiment: {experiment}")
-    print(f"[SETUP] Looking for configs in: {config_dir}")
-
-    # Load configs per method (if they exist)
+    
+    # Load configs
     for m in methods:
-        cfg_path = os.path.join(config_dir, f"{experiment}_{m}.yaml")
-        cfg = load_yaml_config(cfg_path)
-        if cfg is not None:
-            if not cfg.get("enabled", True):
-                print(f"[CONFIG] {m} config found but 'enabled: false'. Skipping.")
-                continue
-            configs[m] = cfg
-
+        p = os.path.join(args.config_dir, f"{args.experiment}_{m}.yaml")
+        if os.path.exists(p):
+            configs[m] = load_yaml(p)
+            
     if not configs:
-        raise RuntimeError("No enabled configs found. Nothing to do.")
+        raise ValueError(f"No configs found in {args.config_dir}")
 
-    # Data cache: avoid re-loading the same pack multiple times
-    data_cache = {}
+    # --- APPLY CLI OVERRIDES ---
+    if 'gradca' in configs:
+        if args.gradca_max_iter is not None:
+            configs['gradca']['optimization']['max_iter'] = args.gradca_max_iter
+        if args.gradca_eta_min is not None:
+            configs['gradca']['optimization']['eta_min'] = args.gradca_eta_min
+        if args.gradca_tol is not None:
+            configs['gradca']['optimization']['tol'] = args.gradca_tol
+        if args.gradca_gain is not None:
+            configs['gradca']['optimization']['gain'] = args.gradca_gain  # <--- LOGIC TO OVERRIDE
+        if args.skip_gradca:
+            configs['gradca']['enabled'] = False
 
-    # Run each method independently
-    for method_name, cfg in configs.items():
-        print("\n" + "="*70)
-        print(f"[{method_name.upper()}] Starting for experiment '{experiment}'")
-        print("="*70)
+    if 'diroca' in configs:
+        if args.diroca_max_iter is not None:
+            configs['diroca']['optimization']['max_iter'] = args.diroca_max_iter
+        if args.skip_diroca:
+            configs['diroca']['enabled'] = False
 
-        data_cfg = cfg.get("data", {})
-        data_path = data_cfg.get("data_path", None)
-        if data_path is None:
-            raise KeyError(f"[{method_name}] 'data_path' missing in config 'data' section.")
+    if 'baryca' in configs:
+        if args.baryca_max_iter is not None:
+            configs['baryca']['optimization']['max_iter'] = args.baryca_max_iter
+        if args.skip_baryca:
+            configs['baryca']['enabled'] = False
 
-        exp_in_cfg = data_cfg.get("experiment", experiment)
-        if exp_in_cfg != experiment:
-            print(f"[WARN] experiment in config ('{exp_in_cfg}') "
-                  f"differs from CLI experiment ('{experiment}'). Using CLI value.")
+    if 'abslingam' in configs:
+        if args.skip_abslingam:
+            configs['abslingam']['enabled'] = False
 
-        # Load data (once per unique data_path)
-        if data_path not in data_cache:
-            print(f"[DATA] Loading pack from: {data_path}")
-            all_data = load_pack_for_experiment(experiment, data_path)
-            data_cache[data_path] = all_data
-        else:
-            all_data = data_cache[data_path]
 
-        N = all_data['N']
-        l = all_data['l']
-        h = all_data['h']
-
-        cv_cfg = cfg.get("cv", {})
-        k_folds = cv_cfg.get("k_folds", 5)
-        seed = cv_cfg.get("seed", 23)
-
-        print(f"[CV] k_folds={k_folds}, seed={seed}, N={N}")
-        folds = prepare_cv_folds_from_N(N, k_folds, seed)
-        print(f"[CV] {len(folds)} folds, ~{len(folds[0]['train'])} train / fold")
-
-        out_cfg = cfg.get("output", {})
-        save_dir = out_cfg.get("save_directory", os.path.join('data', experiment, 'results_nonlinear'))
-        filename_prefix = out_cfg.get("filename_prefix", f"{method_name}_cv_results")
-        os.makedirs(save_dir, exist_ok=True)
-
-        # Method-specific blocks
-        if method_name == 'diroca':
-            opt_cfg = cfg.get("optimization", {})
-            radius_pairs = build_radius_pairs(cfg, N, l, h)
-
-            print(f"[DIROCA] radius_pairs: {radius_pairs}")
-            diroca_cv = {}
-            for fi, fold in enumerate(folds):
-                print(f"[DIROCA] Fold {fi+1}/{len(folds)}")
-                tr = fold['train']; te = fold['test']
-                U_ll_tr = all_data['U_ll_hat'][tr]
-                U_hl_tr = all_data['U_hl_hat'][tr]
-                det_ll_tr = {k: v[tr] for k, v in all_data['det_ll_dict'].items()}
-                det_hl_tr = {k: v[tr] for k, v in all_data['det_hl_dict'].items()}
-
-                diroca_cv[f'fold_{fi}'] = {}
-                for (eps, delt) in radius_pairs:
-                    print(f"  - eps={eps}, delta={delt}")
-                    opt_params, T_learned = run_empirical_minmax(
-                        U_L=U_ll_tr, U_H=U_hl_tr,
-                        det_ll_dict=det_ll_tr, det_hl_dict=det_hl_tr,
-                        omega=all_data['omega'],
-                        epsilon=eps, delta=delt,
-                        eta_min=opt_cfg.get('eta_min', 1e-3),
-                        eta_max=opt_cfg.get('eta_max', 1e-3),
-                        num_steps_min=opt_cfg.get('num_steps_min', 5),
-                        num_steps_max=opt_cfg.get('num_steps_max', 2),
-                        max_iter=opt_cfg.get('max_iter', 5000),
-                        tol=opt_cfg.get('tol', 1e-4),
-                        seed=seed,
-                        robust_L=(eps > 0), robust_H=(delt > 0),
-                        initialization=opt_cfg.get('initialization', 'random'),
-                        gain=opt_cfg.get('gain', 0.0),
-                        optimizers=opt_cfg.get('optimizers', 'adam')
-                    )
-                    key = f'eps_{eps}_delta_{delt}'
-                    diroca_cv[f'fold_{fi}'][key] = {
-                        'T_matrix': T_learned,
-                        'optimization_params': opt_params,
-                        'test_indices': te
-                    }
-
-            outp = os.path.join(save_dir, f"{filename_prefix}.pkl")
-            joblib.dump(diroca_cv, outp)
-            print(f"[DIROCA] saved -> {outp}")
-
-        elif method_name == 'gradca':
-            opt_cfg = cfg.get("optimization", {})
-            gradca_cv = {}
-            for fi, fold in enumerate(folds):
-                print(f"[GRADCA] Fold {fi+1}/{len(folds)}")
-                tr = fold['train']; te = fold['test']
-                U_ll_tr = all_data['U_ll_hat'][tr]
-                U_hl_tr = all_data['U_hl_hat'][tr]
-                det_ll_tr = {k: v[tr] for k, v in all_data['det_ll_dict'].items()}
-                det_hl_tr = {k: v[tr] for k, v in all_data['det_hl_dict'].items()}
-
-                opt_params, T_learned = run_empirical_minmax(
-                    U_L=U_ll_tr, U_H=U_hl_tr,
-                    det_ll_dict=det_ll_tr, det_hl_dict=det_hl_tr,
-                    omega=all_data['omega'],
-                    epsilon=0.0, delta=0.0,
-                    eta_min=opt_cfg.get('eta_min', 1e-3),
-                    eta_max=0.0,
-                    num_steps_min=opt_cfg.get('num_steps_min', 1),
-                    num_steps_max=0,
-                    max_iter=opt_cfg.get('max_iter', 5000),
-                    tol=opt_cfg.get('tol', 1e-6),
-                    seed=seed,
-                    robust_L=False, robust_H=False,
-                    initialization=opt_cfg.get('initialization', 'zeros'),
-                    gain=opt_cfg.get('gain', 0.0),
-                    optimizers=opt_cfg.get('optimizers', 'adam')
-                )
-                gradca_cv[f'fold_{fi}'] = {'gradca_run': {
-                    'T_matrix': T_learned,
-                    'optimization_params': opt_params,
-                    'test_indices': te
-                }}
-
-            outp = os.path.join(save_dir, f"{filename_prefix}.pkl")
-            joblib.dump(gradca_cv, outp)
-            print(f"[GRADCA] saved -> {outp}")
-
-        elif method_name == 'baryca':
-            opt_cfg = cfg.get("optimization", {})
-            baryca_cv = {}
-            for fi, fold in enumerate(folds):
-                print(f"[BARYCA] Fold {fi+1}/{len(folds)}")
-                tr = fold['train']; te = fold['test']
-                U_ll_tr = all_data['U_ll_hat'][tr]
-                U_hl_tr = all_data['U_hl_hat'][tr]
-                det_ll_tr = {k: v[tr] for k, v in all_data['det_ll_dict'].items()}
-                det_hl_tr = {k: v[tr] for k, v in all_data['det_hl_dict'].items()}
-
-                T_bary = run_bary_optim(
-                    U_ll_hat=U_ll_tr, U_hl_hat=U_hl_tr,
-                    det_ll_dict=det_ll_tr, det_hl_dict=det_hl_tr,
-                    omega=all_data['omega'],
-                    lr=opt_cfg.get('lr', 1e-3),
-                    max_iter=opt_cfg.get('max_iter', 5000),
-                    tol=opt_cfg.get('tol', 1e-5),
-                    seed=seed
-                )
-                baryca_cv[f'fold_{fi}'] = {'baryca_run': {
-                    'T_matrix': T_bary,
-                    'test_indices': te
-                }}
-
-            outp = os.path.join(save_dir, f"{filename_prefix}.pkl")
-            joblib.dump(baryca_cv, outp)
-            print(f"[BARYCA] saved -> {outp}")
-
-        elif method_name == 'abslingam':
-            opt_cfg = cfg.get("optimization", {})
-            tau_perfect = opt_cfg.get('tau_perfect', 1e-2)
-            tau_noisy   = opt_cfg.get('tau_noisy', 1e-1)
-
-            # reconstruct observational X from pack: X = D + U at obs
-            pack = joblib.load(data_path)
-            iota_obs = 'iota0'
-            eta_obs  = pack['omega'].get('iota0', 'eta0') if 'omega' in pack else 'eta0'
-            if iota_obs not in pack['ll']:
-                raise KeyError("Missing ll['iota0'] to build Abs-LiNGAM inputs.")
-            if eta_obs not in pack['hl']:
-                raise KeyError(f"Missing hl['{eta_obs}'] to build Abs-LiNGAM inputs.")
-
-            X_ll_obs = pack['ll'][iota_obs]['X']  # (N, d_l)
-            X_hl_obs = pack['hl'][eta_obs]['X']   # (N, d_h)
-
-            abs_cv = {}
-            for fi, fold in enumerate(folds):
-                print(f"[ABSLINGAM] Fold {fi+1}/{len(folds)}")
-                tr = fold['train']; te = fold['test']
-                res = run_abs_lingam(
-                    X_ll_obs[tr], X_hl_obs[tr],
-                    tau_perfect=tau_perfect,
-                    tau_noisy=tau_noisy
-                )
-                abs_cv[f'fold_{fi}'] = {
-                    'Perfect': {'T_matrix': res['Perfect']['T'], 'test_indices': te},
-                    'Noisy':   {'T_matrix': res['Noisy']['T'],   'test_indices': te}
-                }
-
-            outp = os.path.join(save_dir, f"{filename_prefix}.pkl")
-            joblib.dump(abs_cv, outp)
-            print(f"[ABSLINGAM] saved -> {outp}")
-
-        else:
-            print(f"[WARN] Unknown method '{method_name}' - skipping.")
-
-    # --------- Summary ----------
-    print("\n" + "="*60)
-    print("NON-LINEAR OPTIMIZATION COMPLETED")
-    print("="*60)
-    print(f"Experiment: {experiment}")
+    # Load Data (once)
+    data_cfg = configs[next(iter(configs))]['data']
+    all_data = load_lucas_pack(data_cfg['data_path'])
+    N, l, h = all_data['N'], all_data['l'], all_data['h']
+    
+    # Prepare Folds (once)
+    seed = configs.get('diroca', list(configs.values())[0])['cv']['seed']
+    folds = prepare_cv_folds_from_N(N, 5, seed)
+    
     for m, cfg in configs.items():
-        out_cfg = cfg.get("output", {})
-        save_dir = out_cfg.get("save_directory", os.path.join('data', experiment, 'results_nonlinear'))
-        filename_prefix = out_cfg.get("filename_prefix", f"{m}_cv_results")
-        print(f"  - {m}: {os.path.join(save_dir, filename_prefix + '.pkl')}")
-    print("="*60)
+        if not cfg.get('enabled', True): continue
+        
+        print(f"\n[{m.upper()}] Starting optimization...")
+        out_dir = cfg['output']['save_directory']
+        os.makedirs(out_dir, exist_ok=True)
+        filename = cfg['output']['filename_prefix'] + ".pkl"
+        
+        results = {}
+        
+        for fi, fold in enumerate(tqdm(folds, desc=f"{m} folds")):
+            tr, te = fold['train'], fold['test']
+            
+            # Slice Data
+            U_ll_tr = all_data['U_ll_hat'][tr]
+            U_hl_tr = all_data['U_hl_hat'][tr]
+            det_ll_tr = {k: v[tr] for k, v in all_data['det_ll_dict'].items()}
+            det_hl_tr = {k: v[tr] for k, v in all_data['det_hl_dict'].items()}
+            
+            results[f'fold_{fi}'] = {}
+            
+            if m == 'diroca':
+                pairs = cfg.get('radius_sweep', {}).get('pairs', [])
+                if not pairs:
+                    be = compute_empirical_radius(N, m=l)
+                    bd = compute_empirical_radius(N, m=h)
+                    pairs = [(be, bd), (1.0,1.0), (2.0,2.0), (4.0,4.0), (8.0,8.0)]
+                    
+                for (eps, delt) in pairs:
+                    print(f"  > Radius: eps={eps}, delta={delt}")
+                    res = run_minmax_optimization(U_ll_tr, U_hl_tr, det_ll_tr, det_hl_tr, 
+                                                all_data['omega'], cfg, eps, delt)
+                    res['test_indices'] = te
+                    results[f'fold_{fi}'][f'eps_{eps}_delta_{delt}'] = res
+                    
+            elif m == 'gradca':
+                res = run_minmax_optimization(U_ll_tr, U_hl_tr, det_ll_tr, det_hl_tr,
+                                            all_data['omega'], cfg, 0.0, 0.0)
+                res['test_indices'] = te
+                results[f'fold_{fi}']['gradca_run'] = res
+                
+            elif m == 'baryca':
+                res = run_baryca(U_ll_tr, U_hl_tr, det_ll_tr, det_hl_tr, all_data['omega'], cfg)
+                res['test_indices'] = te
+                results[f'fold_{fi}']['baryca_run'] = res
+                
+            elif m == 'abslingam':
+                res_dict = run_abs_lingam(U_ll_tr, U_hl_tr, cfg)
+                for subk in res_dict:
+                    res_dict[subk]['test_indices'] = te
+                results[f'fold_{fi}'] = res_dict
 
+        out_path = os.path.join(out_dir, filename)
+        joblib.dump(results, out_path)
+        print(f"[{m.upper()}] Saved to {out_path}")
+
+    print("\n[DONE] All optimizations complete.")
 
 if __name__ == '__main__':
     main()

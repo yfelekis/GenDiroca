@@ -19,16 +19,29 @@ optimization:
   gain: 0.0                # Xavier gain (0.0 = no Xavier)
   optimizers: "adam"       # "adam" or "adam_betas"
 
+# radius_sweep:
+#   # For LUCAS, we start with explicit radii.
+#   use_theoretical_bounds: false
+#   pairs:
+#     - [0.5, 0.5]
+#     - [1.0, 1.0]
+#     - [2.0, 2.0]
+#     - [4.0, 4.0]
+#     - [8.0, 8.0]
 radius_sweep:
-  # For LUCAS, we start with explicit radii.
-  use_theoretical_bounds: false
-  pairs:
-    - [0.5, 0.5]
+  use_theoretical_bounds: true
+  
+  theoretical_params:
+    eta: 0.05
+    c1: 10.0      
+    c2: 1.0
+    alpha: 2.0
+
+  additional_pairs:
     - [1.0, 1.0]
     - [2.0, 2.0]
     - [4.0, 4.0]
     - [8.0, 8.0]
-
 cv:
   k_folds: 5
   seed: 23
