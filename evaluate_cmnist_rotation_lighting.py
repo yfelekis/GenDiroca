@@ -737,7 +737,7 @@ def main():
     
     levels_dict = {
         "rotation": {"low": 30.0, "high": 90.0},
-        "lighting": {"low": 0.6, "high": 0.2} # Fixed brightness (Low=0.6, High=0.2)
+        "lighting": {"low": 0.6, "high": 3.0} # Fixed brightness (Low=0.6, High=0.2)
     }
     
     print("Evaluating Fixed Shifts...")
