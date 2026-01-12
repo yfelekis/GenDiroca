@@ -4,6 +4,7 @@ from sklearn.model_selection import KFold
 import networkx as nx  
 import numpy as np
 import joblib
+import pickle
 import torch
 import yaml
 from scipy.stats import norm
@@ -169,10 +170,54 @@ def calculate_empirical_error(T_matrix, Dll_test, Dhl_test, metric='fro'):
 def load_all_data(experiment_name):
     """Loads all model blueprints and abstraction data for a given experiment."""
     path = f"data/{experiment_name}"
+    
+    def safe_load_pickle(filepath):
+        """Try multiple methods to load pickle files for compatibility."""
+        import os
+        if not os.path.exists(filepath):
+            raise FileNotFoundError(f"Pickle file not found: {filepath}")
+        
+        # Check if file is a Git LFS pointer (starts with "version https://git-lfs")
+        try:
+            with open(filepath, 'rb') as f:
+                first_bytes = f.read(50)
+                if first_bytes.startswith(b'version https://git-lfs'):
+                    raise IOError(
+                        f"File {filepath} is a Git LFS pointer, not the actual file. "
+                        f"Please run 'git lfs pull' to download the actual files, or "
+                        f"ensure Git LFS is properly configured and the files are available."
+                    )
+        except (UnicodeDecodeError, IOError):
+            pass  # Not a text file, continue with normal loading
+        
+        try:
+            # First try with joblib (standard method)
+            return joblib.load(filepath)
+        except (KeyError, ValueError, EOFError, pickle.UnpicklingError) as e:
+            print(f"Warning: joblib.load failed for {filepath}: {e}")
+            # If joblib fails, try with pickle directly
+            try:
+                with open(filepath, 'rb') as f:
+                    # Try with pickle.load directly
+                    return pickle.load(f)
+            except Exception as e2:
+                print(f"Warning: pickle.load failed for {filepath}: {e2}")
+                # Try with errors='ignore' for bytes decoding issues
+                try:
+                    with open(filepath, 'rb') as f:
+                        unpickler = pickle.Unpickler(f)
+                        # Set encoding for Python 2/3 compatibility if needed
+                        if hasattr(unpickler, 'encoding'):
+                            unpickler.encoding = 'latin1'
+                        return unpickler.load()
+                except Exception as e3:
+                    raise IOError(f"Failed to load {filepath} with multiple methods. "
+                                f"Original error: {e}, pickle error: {e2}, final error: {e3}")
+    
     data = {
-        'LLmodel': joblib.load(f"{path}/LLmodel.pkl"),
-        'HLmodel': joblib.load(f"{path}/HLmodel.pkl"),
-        'abstraction_data': joblib.load(f"{path}/abstraction_data.pkl")
+        'LLmodel': safe_load_pickle(f"{path}/LLmodel.pkl"),
+        'HLmodel': safe_load_pickle(f"{path}/HLmodel.pkl"),
+        'abstraction_data': safe_load_pickle(f"{path}/abstraction_data.pkl")
     }
     print(f"Data loaded for '{experiment_name}'.")
 
