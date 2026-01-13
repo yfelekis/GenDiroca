@@ -1,4 +1,4 @@
-# Model Training & Reproducibility Report
+# Model Training & Reproducibility
 
 ## Overview
 

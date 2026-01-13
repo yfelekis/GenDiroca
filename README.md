@@ -110,7 +110,7 @@ Run the notebook `huber_lucas.ipynb`.
 
 #### Electric Battery Manufacturing (EBM)
 
-The **EBM** dataset applies the framework to a real-world scenario involving lithium-ion battery production. The dataset contains data from two experimental settings representing different levels of granularity: the low-level setting (WMG) captures the effect of a control variable (Comma Gap, **CG**) on Mass Loading outputs (**ML₁**, **ML₂**) at two distinct spatial locations, while the high-level setting (LRCS) relates the same control variable to a single aggregated output (**ML**). The low-level variables are $\mathbf{X}_L = [\text{CG}, \text{ML}_1, \text{ML}_2]^\top$, and the high-level variables are $\mathbf{X}_H = [\text{CG}, \text{ML}]^\top$. The framework uses parametric Additive Noise Models (ANMs) with linear mechanisms to fit both datasets, performing exact abduction to recover noise terms. Interventions correspond to setting the Comma Gap to specific continuous values (e.g., 75, 100, 200 μm).
+The **EBM** dataset applies the framework to a real-world scenario involving lithium-ion battery production. The dataset contains data from two experimental settings representing different levels of granularity: the low-level setting (WMG) captures the effect of a control variable (Comma Gap, **CG**) on Mass Loading outputs (**ML₁**, **ML₂**) at two distinct spatial locations, while the high-level setting (LRCS) relates the same control variable to a single aggregated output (**ML**). The low-level variables are $\mathbf{X}_L = [\text{CG}, \text{ML}_1, \text{ML}_2]^\top$, and the high-level variables are $\mathbf{X}_H = [\text{CG}, \text{ML}]^\top$. The framework uses parametric Additive Noise Models (ANMs) with linear mechanisms with intercepts to fit both datasets, performing exact abduction to recover noise terms. Interventions correspond to setting the Comma Gap to specific continuous values (e.g., 75, 100, 200 μm).
 
 **Data Preparation:**
 ```bash
@@ -132,7 +132,7 @@ Run the notebook `huber_battery.ipynb`.
 
 ### 3. High-Dimensional Experiment (Colored MNIST)
 
-A complex vision task testing the framework on a high-dimensional, non-linear scenario. The objective is to learn a robust **linear** abstraction $T$ that aligns a complex pixel-level SCM with a disentangled latent-space SCM. Both levels operate on the same graph structure with parents **D** (Digit) and **C** (Color), which are correlated ($p=0.85$). The low-level target $X^\ell$ is instantiated as the high-dimensional image $I_P \in \mathbb{R}^{3072}$, while the high-level target $X^h$ is the compact latent code $z \in \mathbb{R}^{64}$ obtained via a pre-trained encoder $E_\phi$ from Xia et al. (2024). The experiment utilizes a set of 10 distinct interventions alongside observational data, including atomic interventions (e.g., $\text{do}(D=6)$) and joint interventions (e.g., $\text{do}(D=4, C=4)$) that break spurious correlations present in the observational distribution.
+A complex vision task testing the framework on a high-dimensional, non-linear scenario. The objective is to learn a robust **linear** abstraction $T$ that aligns a complex pixel-level SCM with a disentangled latent-space SCM. Both levels operate on the same graph structure with parents **D** (Digit) and **C** (Color), which are correlated ($p=0.85$). The low-level target $X^\ell$ is instantiated as the high-dimensional image $I_P \in \mathbb{R}^{3072}$, while the high-level target $X^h$ is the compact latent code $z \in \mathbb{R}^{64}$ obtained via a pre-trained encoder $E_\phi$ from Xia et al. (2024). The experiment utilizes a set of 10 distinct interventions alongside observational data, including atomic interventions (e.g., do$(D=6)$) and joint interventions (e.g., do$(D=4, C=4)$) that break spurious correlations present in the observational distribution.
 
 **SCM Construction:**
 - **Low-Level Model ($f_L$):** U-Net with FiLM (Feature-wise Linear Modulation) layers that take a grayscale "Shape" image as input and inject causal control via parents $(D, C)$.
@@ -140,11 +140,7 @@ A complex vision task testing the framework on a high-dimensional, non-linear sc
 
 **Prerequisite:**:This experiment requires the pre-trained encoder $E_\phi$ to generate the ground-truth latent targets. The encoder is provided as a "frozen" TorchScript artifact in checkpoints/xia_color_mnist_rep/rep_encoder_only_traced.pt.
 
-Source: The model was trained using the auto_enc_conditional objective from the Neural Causal Abstractions framework.
-
-Reproducibility: See checkpoints/model_training.md for the exact training command, hyperparameters, and the procedure used to extract this artifact.
-
-Backup: The original PyTorch Lightning checkpoint is preserved in the same directory for archival purposes.
+See checkpoints/model_training.md for the exact training command, hyperparameters, and the procedure used to extract this artifact. The original PyTorch Lightning checkpoint is preserved in the same directory for archival purposes.
 
 *Overall:* Ensure `rep_encoder_only_traced.pt` (the pre-trained encoder) is available in the directory (see `generate_data_cmnist.py`).
 
