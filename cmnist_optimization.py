@@ -6,7 +6,7 @@ import pickle
 import torch
 
 from tqdm import tqdm
-from tqdm.notebook import tqdm as tqdm_nb  # unused in script mode but harmless
+from tqdm.notebook import tqdm as tqdm_nb  
 
 # --- Vision / models ---
 import torchvision
@@ -40,7 +40,7 @@ import pandas as pd
 # ============================================================
 def compute_empirical_radius(N, eta=0.05, c1=1000.0, c2=1.0, alpha=2.0, m=1):
     """
-    Compute an empirical Wasserstein-type radius (heuristic formula).
+    Compute an empirical Wasserstein-type radius.
     """
     if N <= 1:
         return 0.0
@@ -213,7 +213,7 @@ def rebuild_parent_infos(Dll_samples, Dhl_samples):
 # ============================================================
 def det_hl_func_FIXED(hl_model, parent_info_hl, intervention):
     """
-    High-level deterministic function (FIXED).
+    High-level deterministic function.
 
     parent_info_hl: numpy array (N,20) = [Xd(10) | Xc(10)]
     intervention: Intervention object (or None)
@@ -251,7 +251,7 @@ def det_hl_func_FIXED(hl_model, parent_info_hl, intervention):
 
 def det_ll_func_FIXED(ll_model, parent_info_ll_tuple, intervention):
     """
-    Low-level deterministic function (FIXED).
+    Low-level deterministic function.
 
     parent_info_ll_tuple:
         (final_images_obs, img_shapes_obs, digits_obs, colors_obs)
@@ -302,7 +302,7 @@ def rebuild_deterministic_dicts(
     parent_info_hl,
 ):
     print("\n" + "=" * 80)
-    print("REBUILD + VERIFY DETERMINISTIC DICTIONARIES (LL + HL) — FULL SCRIPT")
+    print("REBUILD + VERIFY DETERMINISTIC DICTIONARIES (LL + HL)")
     print("=" * 80)
 
     assert set(ll_interventions.keys()) == set(Ill_relevant), "LL intervention labels mismatch vs omega keys."
@@ -311,7 +311,7 @@ def rebuild_deterministic_dicts(
     print("✅ Using ll_interventions / hl_interventions from construction.")
 
     det_hl_dict = {}
-    for lab in tqdm(Ihl_relevant, desc="HL deterministic (FIXED)"):
+    for lab in tqdm(Ihl_relevant, desc="HL deterministic"):
         det_hl_dict[lab] = det_hl_func_FIXED(
             hl_model,
             parent_info_hl,
@@ -319,7 +319,7 @@ def rebuild_deterministic_dicts(
         )
 
     det_ll_dict = {}
-    for lab in tqdm(Ill_relevant, desc="LL deterministic (FIXED)"):
+    for lab in tqdm(Ill_relevant, desc="LL deterministic"):
         det_ll_dict[lab] = det_ll_func_FIXED(
             ll_model,
             parent_info_ll_tuple,
@@ -377,7 +377,7 @@ def rebuild_deterministic_dicts(
     Xd = features[:, :10]
     Xc = features[:, 10:20]
     z_correct = hl_model.predict(Xd, Xc)
-    z_wrong = hl_model.predict(features, features)  # old buggy call
+    z_wrong = hl_model.predict(features, features)  
 
     mean_err = np.mean(np.abs(z_correct - z_wrong))
     max_err = np.max(np.abs(z_correct - z_wrong))
@@ -460,7 +460,7 @@ def subsample_data(
     print(f"det_ll_dict['{some_iota}']: {det_ll_dict[some_iota].shape} → {det_ll_dict_sub[some_iota].shape}")
     print(f"det_hl_dict['{some_eta}']: {det_hl_dict[some_eta].shape} → {det_hl_dict_sub[some_eta].shape}")
 
-    print("\n✅ Subsampling complete. All subsequent training will use the reduced dataset.")
+    print("\nSubsampling complete.")
 
     # Optimization-only views
     det_ll_dict_opt = {k: v[:, :3072].contiguous() for k, v in det_ll_dict_sub.items()}
@@ -496,7 +496,7 @@ def setup_cv_folds(data_tuple, n_splits=5, seed=23, iota_obs="obs"):
     folds = []
     for train_idx, test_idx in kf.split(np.arange(num_samples)):
         folds.append({"train": train_idx, "test": test_idx})
-    print(f"✓ CV folds created. Each fold will have ~{len(folds[0]['train'])} training samples.")
+    print(f"CV folds created. Each fold will have ~{len(folds[0]['train'])} training samples.")
     print(f"Created {len(folds)} CV folds (using observational key = {iota_obs})")
     return folds
 
@@ -602,13 +602,7 @@ def run_abs_lingam_cmnist(
     tau_perfect: float = 1e-2,
     tau_noisy: float = 1e-1,
 ):
-    """
-    Abs-LiNGAM in the *OPT view*:
 
-        pixels (LL)  →  latent z (HL)
-
-    We IGNORE digit/color one-hot vectors on both sides.
-    """
     if isinstance(Dll_obs_full, torch.Tensor):
         Dll_obs_full = Dll_obs_full.detach().cpu().numpy()
     if isinstance(Dhl_obs_full, torch.Tensor):
@@ -653,7 +647,7 @@ def run_abs_lingam_cmnist(
 
 
 # ============================================================
-# Empirical objectives (OPT view)
+# Empirical objectives 
 # ============================================================
 def empirical_objective_cmnist_opt(
     T_opt,
@@ -715,7 +709,7 @@ def barycentric_objective_cmnist_opt(
     omega,
 ):
     """
-    BaryCA objective in the *opt view*.
+    BaryCA objective.
     """
     device = T.device
 
@@ -1205,7 +1199,7 @@ def train_diroca_single_run(
     epsilon,
     delta,
 ):
-    print(f"Starting DiRoCA Training Run (OPT view): eps={epsilon}, del={delta} (delta ignored)")
+    print(f"Starting DiRoCA Training Run: eps={epsilon}, del={delta}")
     print(f"Hyperparameters: {run_hyperparams}")
 
     diroca_training_results = {}
@@ -1259,14 +1253,12 @@ def train_diroca_single_run(
                 }
             }
             monitors[fold_key] = trained_monitor
-            print(f"  ✓ Training completed for Fold {i+1}")
+            print(f"  Training completed for Fold {i+1}")
         except Exception as e:
-            print(f"  ✗ ERROR during training for Fold {i+1}: {e}")
+            print(f"  ERROR during training for Fold {i+1}: {e}")
             diroca_training_results[fold_key] = {"error": str(e)}
             monitors[fold_key] = None
 
-        # NOTE: keep this break if you only want fold_0 for quick experiments
-        # break
 
     print("\nDiRoCA Training complete.")
     return {"diroca": diroca_training_results}, monitors
@@ -1282,7 +1274,7 @@ def train_gradca_single_run(
     run_hyperparams,
     fixed_params,
 ):
-    print("Starting GradCA Training (OPT view)...")
+    print("Starting GradCA Training...")
     print(f"Hyperparameters: {run_hyperparams}")
 
     gradca_training_results = {}
@@ -1342,13 +1334,12 @@ def train_gradca_single_run(
                 }
             }
             monitors[fold_key] = trained_monitor
-            print(f"  ✓ Training completed for Fold {i+1}")
+            print(f"Training completed for Fold {i+1}")
         except Exception as e:
-            print(f"  ✗ ERROR during training for Fold {i+1}: {e}")
+            print(f"ERROR during training for Fold {i+1}: {e}")
             gradca_training_results[fold_key] = {"error": str(e)}
             monitors[fold_key] = None
 
-        # break
 
     print("\nGradCA Training complete.")
     return {"gradca": gradca_training_results}, monitors
@@ -1364,7 +1355,7 @@ def train_baryca_single_run(
     run_hyperparams,
     fixed_params,
 ):
-    print("Starting BaryCA Training (OPT view)...")
+    print("Starting BaryCA Training...")
     print(f"Hyperparameters: {run_hyperparams}")
 
     baryca_training_results = {}
@@ -1414,20 +1405,19 @@ def train_baryca_single_run(
                 }
             }
             monitors[fold_key] = trained_monitor
-            print(f"  ✓ BaryCA training completed for Fold {i+1}")
+            print(f"BaryCA training completed for Fold {i+1}")
         except Exception as e:
-            print(f"  ✗ ERROR during BaryCA training for Fold {i+1}: {e}")
+            print(f"ERROR during BaryCA training for Fold {i+1}: {e}")
             baryca_training_results[fold_key] = {"error": str(e)}
             monitors[fold_key] = None
 
-        # break
 
     print("\nBaryCA Training complete.")
     return {"baryca": baryca_training_results}, monitors
 
 
 # ============================================================
-# Abs-LiNGAM wrapper (pixels → z only)
+# Abs-LiNGAM wrapper 
 # ============================================================
 def train_abslingam_single_run(
     cv_folds,
@@ -1512,7 +1502,6 @@ def train_abslingam_single_run(
             print(f"  ✗ ERROR during Abs-LiNGAM for Fold {i+1}: {e}")
             abslingam_training_results[fold_key] = {"error": str(e)}
 
-        # break
 
     print("\nAbs-LiNGAM Training finished.")
     return {"abslingam": abslingam_training_results}
@@ -1534,50 +1523,50 @@ def merge_all_results(all_results_diroca, results_gradca, results_baryca, result
         if isinstance(all_results_diroca, dict):
             for radius_key, results_outer in all_results_diroca.items():
                 if not _is_valid_method_dict(results_outer):
-                    print(f"  ✗ Skipped DiRoCA results for {radius_key} (None/invalid).")
+                    print(f"  Skipped DiRoCA results for {radius_key} (None/invalid).")
                     continue
 
                 if "diroca" not in results_outer or not isinstance(results_outer["diroca"], dict):
-                    print(f"  ✗ Skipped DiRoCA results for {radius_key} (missing 'diroca' key).")
+                    print(f"  Skipped DiRoCA results for {radius_key} (missing 'diroca' key).")
                     continue
 
                 method_name = f"diroca_{radius_key}"
                 all_results[method_name] = results_outer["diroca"]
-                print(f"  ✓ Added DiRoCA results for {radius_key}.")
+                print(f"  Added DiRoCA results for {radius_key}.")
         else:
-            print("  ✗ Warning: DiRoCA results ('all_results_diroca') not found or invalid.")
+            print("  Warning: DiRoCA results ('all_results_diroca') not found or invalid.")
     else:
-        print("  ✗ Warning: DiRoCA results ('all_results_diroca') not found or invalid.")
+        print("  Warning: DiRoCA results ('all_results_diroca') not found or invalid.")
 
     # GradCA
     if results_gradca is not None and isinstance(results_gradca, dict) and "gradca" in results_gradca:
         if isinstance(results_gradca["gradca"], dict):
             all_results["gradca"] = results_gradca["gradca"]
-            print("  ✓ Added GradCA results (single run).")
+            print("  Added GradCA results (single run).")
         else:
-            print("  ✗ Warning: results_gradca['gradca'] not a dict.")
+            print("  Warning: results_gradca['gradca'] not a dict.")
     else:
-        print("  ✗ Warning: GradCA results not found or invalid.")
+        print("  Warning: GradCA results not found or invalid.")
 
     # BaryCA
     if results_baryca is not None and isinstance(results_baryca, dict) and "baryca" in results_baryca:
         if isinstance(results_baryca["baryca"], dict):
             all_results["baryca"] = results_baryca["baryca"]
-            print("  ✓ Added BaryCA results (single run).")
+            print("  Added BaryCA results (single run).")
         else:
-            print("  ✗ Warning: results_baryca['baryca'] not a dict.")
+            print("  Warning: results_baryca['baryca'] not a dict.")
     else:
-        print("  ✗ Warning: BaryCA results not found or invalid.")
+        print("  Warning: BaryCA results not found or invalid.")
 
     # Abs-LiNGAM
     if results_abslingam is not None and isinstance(results_abslingam, dict) and "abslingam" in results_abslingam:
         if isinstance(results_abslingam["abslingam"], dict):
             all_results["abslingam"] = results_abslingam["abslingam"]
-            print("  ✓ Added Abs-LiNGAM results (single run).")
+            print("  Added Abs-LiNGAM results (single run).")
         else:
-            print("  ✗ Warning: results_abslingam['abslingam'] not a dict.")
+            print("  Warning: results_abslingam['abslingam'] not a dict.")
     else:
-        print("  ✗ Warning: Abs-LiNGAM results not found or invalid.")
+        print("  Warning: Abs-LiNGAM results not found or invalid.")
 
     print("\nStructure of merged 'all_results':")
     if not all_results:
@@ -1673,7 +1662,7 @@ def main(args):
 
     U_ll_hat_fixed, U_hl_hat_fixed, U_ll_hat_opt, U_hl_hat_opt = fix_noise_data(U_ll_hat, U_hl_hat)
 
-    print("Core optimization functions defined (OPT view: pixels -> z, delta=0).")
+    print("Core optimization functions defined (OPT: pixels -> z, delta=0).")
 
     # ---------------------------------------------------------
     # Training DiRoCA multiple radii (including eps_emp)
@@ -1807,7 +1796,7 @@ def main(args):
     # ---------------------------------------------------------
     # Training BaryCA
     # ---------------------------------------------------------
-    print("\n" + "=" * 20 + " Training BaryCA (pixels → z only) " + "=" * 20)
+    print("\n" + "=" * 20 + " Training BaryCA (pixels → z) " + "=" * 20)
 
     baryca_hyperparams = {
         "lr": 1e-3,
@@ -1868,7 +1857,7 @@ def main(args):
     # ---------------------------------------------------------
     # Training Abs-LiNGAM
     # ---------------------------------------------------------
-    print("\n" + "=" * 20 + " Training Abs-LiNGAM (pixels → z only, SELF-CONTAINED) " + "=" * 20)
+    print("\n" + "=" * 20 + " Training Abs-LiNGAM (pixels → z) " + "=" * 20)
 
     abslingam_hyperparams = {
         "tau_perfect": 1e-2,
@@ -1904,48 +1893,48 @@ def main(args):
     save_all_results_path = os.path.join(eval_dir, "cmnist_all_results.pkl")
     with open(save_all_results_path, "wb") as f:
         pickle.dump(all_results, f)
-    print(f"  ✓ Saved all_results to {save_all_results_path}")
+    print(f"  Saved all_results to {save_all_results_path}")
 
     # 2) cv_folds
     cv_folds_path = os.path.join(eval_dir, "cmnist_cv_folds.pkl")
     with open(cv_folds_path, "wb") as f:
         pickle.dump(cv_folds, f)
-    print(f"  ✓ Saved cv_folds to {cv_folds_path}")
+    print(f"  Saved cv_folds to {cv_folds_path}")
 
     # 3) omega (env pair mapping)
     omega_path = os.path.join(eval_dir, "cmnist_omega.pkl")
     with open(omega_path, "wb") as f:
         pickle.dump(omega, f)
-    print(f"  ✓ Saved omega to {omega_path}")
+    print(f"  Saved omega to {omega_path}")
 
     # 4) deterministic opt-view dicts
     det_ll_opt_path = os.path.join(eval_dir, "cmnist_det_ll_dict_opt.pt")
     torch.save(det_ll_dict_opt, det_ll_opt_path)
-    print(f"  ✓ Saved det_ll_dict_opt to {det_ll_opt_path}")
+    print(f"  Saved det_ll_dict_opt to {det_ll_opt_path}")
 
     det_hl_opt_path = os.path.join(eval_dir, "cmnist_det_hl_dict_opt.pt")
     torch.save(det_hl_dict_opt, det_hl_opt_path)
-    print(f"  ✓ Saved det_hl_dict_opt to {det_hl_opt_path}")
+    print(f"  Saved det_hl_dict_opt to {det_hl_opt_path}")
 
     # 5) opt-view noise
     U_ll_opt_path = os.path.join(eval_dir, "cmnist_U_ll_hat_opt.pt")
     torch.save(U_ll_hat_opt, U_ll_opt_path)
-    print(f"  ✓ Saved U_ll_hat_opt to {U_ll_opt_path}")
+    print(f"  Saved U_ll_hat_opt to {U_ll_opt_path}")
 
     U_hl_opt_path = os.path.join(eval_dir, "cmnist_U_hl_hat_opt.pt")
     torch.save(U_hl_hat_opt, U_hl_opt_path)
-    print(f"  ✓ Saved U_hl_hat_opt to {U_hl_opt_path}")
+    print(f"  Saved U_hl_hat_opt to {U_hl_opt_path}")
 
     # 6) Dll_samples / Dhl_samples
     dll_samples_path = os.path.join(eval_dir, "cmnist_Dll_samples.pkl")
     with open(dll_samples_path, "wb") as f:
         pickle.dump(Dll_samples, f)
-    print(f"  ✓ Saved Dll_samples to {dll_samples_path}")
+    print(f"  Saved Dll_samples to {dll_samples_path}")
 
     dhl_samples_path = os.path.join(eval_dir, "cmnist_Dhl_samples.pkl")
     with open(dhl_samples_path, "wb") as f:
         pickle.dump(Dhl_samples, f)
-    print(f"  ✓ Saved Dhl_samples to {dhl_samples_path}")
+    print(f"  Saved Dhl_samples to {dhl_samples_path}")
 
     print("CMNIST eval state saved.\n")
 

@@ -1,13 +1,4 @@
 #!/usr/bin/env python3
-"""
-Battery empirical evaluation script.
-
-Usage example:
-    python run_battery_evaluation.py \
-        --alpha_min 0.0 --alpha_max 1.0 --alpha_steps 10 \
-        --noise_min 0.0 --noise_max 10.0 --noise_steps 20 \
-        --trials 20 --distribution gaussian
-"""
 
 import argparse
 import os
@@ -97,10 +88,8 @@ def apply_huber_contamination_battery(
         noise = rng.normal(loc=0.0, scale=noise_scale, size=shape).astype(np.float32)
     elif distribution == "student-t":
         df = 3.0
-        # standard t, scaled by noise_scale
         noise = (rng.standard_t(df=df, size=shape) * noise_scale).astype(np.float32)
     elif distribution == "exponential":
-        # strictly positive shift; mimics the old "exponential" contamination
         noise = rng.exponential(scale=noise_scale, size=shape).astype(np.float32)
     else:
         raise ValueError(f"Unknown distribution: {distribution}")
@@ -185,7 +174,7 @@ def run_battery_evaluation(
     row_idx_hl  = hl_data["row_idx"]
     omega       = abstraction_data["omega"]
 
-    print("✅ Battery data loaded.")
+    print("Battery data loaded.")
     print(f"LL interventions: {list(Dll_samples.keys())}")
     print(f"HL interventions: {list(Dhl_samples.keys())}")
     print(f"Omega mapping: {omega}")
@@ -260,7 +249,6 @@ def run_battery_evaluation(
     print(f"  - noise: {noise_steps} points from {noise_values[0]:.2f} to {noise_values[-1]:.2f}")
     print(f"  - trials: {trials}")
 
-    # ----- Count total configs for progress bar -----
     base_runs = 0
     for method_group_key, method_results_inner in all_results.items():
         if not isinstance(method_results_inner, dict):
@@ -284,7 +272,7 @@ def run_battery_evaluation(
     evaluation_records = []
 
     if total_configs == 0:
-        print("❌ No valid training results found. Aborting.")
+        print("No valid training results found. Aborting.")
         return pd.DataFrame()
 
     pbar = tqdm(total=total_configs, desc="Evaluating Battery Methods")
@@ -649,11 +637,10 @@ def run_battery_evaluation(
         output_path = output_dir / fname
     else:
         out_path = Path(output)
-        # force into evaluation_results dir
         output_path = output_dir / out_path.name
 
     full_results_df.to_pickle(output_path)
-    print(f"\n✅ Evaluation results saved to: {output_path}")
+    print(f"\nEvaluation results saved to: {output_path}")
     print(f"Total records: {len(full_results_df)}")
     print("Methods:", sorted(full_results_df["method"].unique()))
     return full_results_df

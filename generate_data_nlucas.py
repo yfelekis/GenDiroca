@@ -1,14 +1,11 @@
 #!/usr/bin/env python3
 """
-LUCAS (non-linear LiLUCAS) data generator
+LUCAS (non-linear LUCAS) data generator
 -----------------------------------------
-A minimal, self-contained generator for a non-linear additive-noise SCM at the
+A  generator for a non-linear additive-noise SCM at the
 low level (LL), an inferred linear ANM at the high level (HL), and a fixed
 linear abstraction T. It outputs DIROCA-ready tuples (D, U, X) per intervention
 along with the omega mapping.
-
-Usage (example):
-    python lucas_nonlinear_generator.py --seed 23 --n_per_int 10000 --out data/lucas
 
 Saves a single joblib file at <out>/lucas_pack.pkl containing a dictionary with keys:
     - 'T': (3x6) numpy array
@@ -18,7 +15,6 @@ Saves a single joblib file at <out>/lucas_pack.pkl containing a dictionary with 
     - 'hl_model': {'alpha': float, 'beta': (2,), 'mu': (3,), 'sigma_diag': (3,)}
     - 'graphs': {'ll_edges': list of (parent, child), 'hl_edges': list}
 
-Everything is numpy arrays of dtype float64. Covariances are diagonal.
 """
 
 from __future__ import annotations
@@ -134,7 +130,7 @@ def build_lucas(seed: int = 23) -> LucasSpec:
         'iota10': {'Allergy': 1.0},
     }
 
-    # HL interventions (mirror semantics)
+    # HL interventions 
     interventions_hl = {
         'eta0': None,
         'eta1': {"Environment'": 0.0},
@@ -329,7 +325,7 @@ def main():
 
     # Use a deterministic per-intervention seed schedule for reproducibility
     # (different from global to avoid accidental coupling)
-    base = args.seed * 7919  # a prime multiplier
+    base = args.seed * 7919  
 
     for iota_name, iota in spec.interventions_ll.items():
         if iota_name == 'iota0':
@@ -351,7 +347,7 @@ def main():
     joblib.dump(pack, out_path)
 
     # small human-friendly printout
-    print('✓ LUCAS non-linear data generated')
+    print(' nLUCAS data generated')
     print(f'  seed           : {args.seed}')
     print(f'  samples/int    : {args.n_per_int}')
     print(f'  interventions  : {len(spec.interventions_ll)} LL  |  {len(spec.interventions_hl)} HL')

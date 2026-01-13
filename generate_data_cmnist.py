@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 """
-Unified CMNIST Generator (Xia-aligned LL images + z via TorchScript encoder)
+Unified CMNIST Generator (LL images + z via TorchScript encoder)
 
-- Low level (LL): generate Colored MNIST images exactly like Xia et al.:
+- Low level (LL): generate Colored MNIST images:
     * load MNIST via python-mnist from dat/mnist/
     * colorize with the same 10-color palette
     * Resize -> ToTensor -> scale to [-1, 1]
   We then convert to [0,1] ONLY for saving in Dll_samples (compatibility).
 
 - High level (HL): z = encoder_ts(I_P_norm) where I_P_norm is the [-1,1] image.
-  We pack [onehot(D) | onehot(C) | z] per your old format (previously the last
-  column was a scalar mean; now it is a 64-D vector).
+  We pack [onehot(D) | onehot(C) | z].
 
 Outputs (same as before):
   - dll_samples.pkl : dict[str] -> (final_images[0,1], img_shapes[-1,1], digits, colors)
@@ -27,14 +26,13 @@ import torch
 import torch.nn.functional as F
 from typing import Dict, Tuple, List, Optional
 
-# ---- keep your Intervention & constants exactly as before ----
 from operations import Intervention
 
 # Variable names (LL / HL)
 D_LL, C_LL, P_LL = 'Digit', 'Color', 'Pixels'
 D_HL, C_HL, I_HL = 'Digit_', 'Color_', 'Image_'
 
-# Stable intervention labels (order matters)
+# Stable intervention labels 
 INTERVENTION_LABELS = [
     "obs",          # iota0 / eta0 (None)
     "D=6",          # iota1 / eta1
@@ -75,7 +73,7 @@ def make_ll_interventions() -> Dict[str, Optional[Intervention]]:
 
 
 def make_hl_interventions() -> Dict[str, Optional[Intervention]]:
-    """Return mapping label -> HL Intervention object (for completeness)."""
+    """Return mapping label -> HL Intervention object."""
     return {
         "obs": None,
         "D=6": Intervention({D_HL: 6}),
@@ -102,7 +100,7 @@ def define_interventions():
     return omega_labels, ll_int, hl_int
 
 # -----------------------------
-# Xia-aligned color MNIST maker
+# color MNIST maker
 # -----------------------------
 
 class XiaAlignedColorMNIST:
@@ -145,7 +143,6 @@ class XiaAlignedColorMNIST:
             transforms.Normalize((0.5,), (0.5,))  # -> [-1,1]
         ])
 
-        # Load MNIST as Xia does (python-mnist package expects the raw idx files)
         self.mnist_path = mnist_dir
         must_exist = [
             "train-images-idx3-ubyte",
@@ -157,7 +154,7 @@ class XiaAlignedColorMNIST:
             if not os.path.exists(os.path.join(self.mnist_path, f)):
                 raise FileNotFoundError(
                     f"MNIST file missing: {os.path.join(self.mnist_path, f)}\n"
-                    f"Make sure you placed the idx files under this folder."
+                    f"Make sure the idx files are under this folder."
                 )
 
         mn = MNIST(self.mnist_path)
@@ -165,14 +162,14 @@ class XiaAlignedColorMNIST:
         images = np.array(images).reshape((-1, 28, 28))
         labels = np.array(labels)
 
-        # Bucket by digit for fast sampling (exactly like Xia’s class)
+        # Bucket by digit for fast sampling
         self.images_by_digit: Dict[int, List[np.ndarray]] = {i: [] for i in range(10)}
         for x, y in zip(images, labels):
             self.images_by_digit[int(y)].append(x.astype(np.uint8))
 
     @staticmethod
     def _colorize_uint8(gray_uint8_hw: np.ndarray, rgb: Tuple[float, float, float]) -> np.ndarray:
-        """gray_uint8_hw -> (H,W,3) uint8 using Xia’s palette multiply + rounding."""
+        """gray_uint8_hw -> (H,W,3) uint8 multiply + rounding."""
         h, w = gray_uint8_hw.shape
         g = gray_uint8_hw.astype(np.float32) / 255.0  # 0..1
         r = np.clip(np.round(g * rgb[0] * 255.0), 0, 255)
@@ -200,7 +197,7 @@ class XiaAlignedColorMNIST:
 
         # Shape path (grayscale) -> [-1,1]
         shape_01 = self.transform_shape.transforms[0:2]  # we’ll just re-run cleanly below
-        # simpler: just feed through the dedicated pipeline
+        
         gray28_3d = gray28.reshape(28, 28)               # uint8
         shape_norm = self.transform_shape(gray28_3d)     # (1,H,W) in [-1,1]
 
@@ -258,7 +255,7 @@ def _apply_do_or_align(n, do: Optional[Intervention], p_align=0.85):
     return digit.astype(int), color.astype(int)
 
 # -----------------------------
-# Main generation routine
+# Main
 # -----------------------------
 
 def generate_cmnist_data_new(
@@ -271,7 +268,7 @@ def generate_cmnist_data_new(
     mnist_dir: str = "third_party/xia_nca/NeuralCausalAbstractions/dat/mnist",
 ):
     """
-    Generate CMNIST data with Xia-aligned LL images and HL = z from TorchScript encoder.
+    Generate CMNIST data LL images and HL = z from TorchScript encoder.
     Saves:
       - dll_samples.pkl : dict[str] -> (final_images[0,1], img_shapes[-1,1], digits, colors)
       - dhl_samples.pkl : dict[str] -> (N, 84)  [10 one-hot D | 10 one-hot C | 64-dim z]
@@ -280,10 +277,10 @@ def generate_cmnist_data_new(
     set_global_seed(seed)
     os.makedirs(output_dir, exist_ok=True)
 
-    # Build intervention sets & omega mapping (unchanged)
+    # Build intervention sets & omega mapping
     omega_labels, ll_ints, hl_ints = define_interventions()
 
-    # Xia-aligned image generator
+    # image generator
     gen = XiaAlignedColorMNIST(image_size=resolution, mnist_dir=mnist_dir)
 
     # Load TorchScript encoder (your traced adapter: [B,3,H,W] -> [B,64])
@@ -328,17 +325,15 @@ def generate_cmnist_data_new(
     obs_ll_images = Dll_samples["obs"][0]
     imin, imax = obs_ll_images.min().item(), obs_ll_images.max().item()
     print(f"[Range check] LL colored images (obs) in [{imin:.3f}, {imax:.3f}] (expected [0,1])")
-    if not (-1e-6 <= imin <= 0.0 + 1e-6 and 1.0 - 1e-6 <= imax <= 1.0 + 1e-6):
-        print("WARNING: Colored images are not in [0,1]. Check the pipeline.")
 
-    # Save artifacts
+    # Save
     torch.save(Dll_samples, os.path.join(output_dir, 'dll_samples.pkl'))
     torch.save(Dhl_samples, os.path.join(output_dir, 'dhl_samples.pkl'))
     torch.save(omega_labels, os.path.join(output_dir, 'intervention_mapping.pkl'))
     with open(os.path.join(output_dir, 'intervention_mapping.json'), 'w') as f:
         json.dump(omega_labels, f, indent=2)
 
-    print(f"✓ Saved to {output_dir}")
+    print(f"Saved to {output_dir}")
     return Dll_samples, Dhl_samples, omega_labels
 
 # -----------------------------
@@ -356,7 +351,7 @@ def build_argparser():
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--resolution", type=int, default=32)
     p.add_argument("--p-align", type=float, default=0.85,
-                   help="Probability that D and C align with u_conf (Xia’s confounding).")
+                   help="Probability that D and C align with u_conf.")
     p.add_argument("--mnist-dir", type=str,
                    default="third_party/xia_nca/NeuralCausalAbstractions/dat/mnist",
                    help="Folder with raw MNIST idx files (train-images-idx3-ubyte, etc.).")
@@ -364,7 +359,7 @@ def build_argparser():
 
 def main():
     args = build_argparser().parse_args()
-    print("Unified CMNIST Generator (Xia-aligned) — start")
+    print("CMNIST Generator — start")
     print("=" * 60)
     print(f"  encoder_ts: {args.encoder_ts}")
     print(f"  out dir   : {args.output_dir}")

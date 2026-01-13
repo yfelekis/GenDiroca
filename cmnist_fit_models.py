@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Train ColorMNIST Models (Xia-encoder version)
+Train ColorMNIST Models
 
 - Low level (LL): same as before
     U-Net with FiLM, learning Pixels | (shape, Digit, Color)
@@ -58,7 +58,7 @@ def ensure_tanh_scaled(images: torch.Tensor) -> torch.Tensor:
 
 
 # ============================================================
-# Model blocks (U-Net for LL) — unchanged
+# Model blocks (U-Net for LL)
 # ============================================================
 
 class ConvBlock(nn.Module):
@@ -202,7 +202,7 @@ def r2_imagewise(y, yhat):
 
 
 # ============================================================
-# LL training (U-Net) — unchanged
+# LL training (U-Net)
 # ============================================================
 
 def train_cnn_model_unet(
@@ -318,7 +318,7 @@ def abduce_ll_noise_unet(ll_obs_data, seed=42, norm_type="bn"):
     preds = torch.cat(preds)
     U_ll_hat = imgs_scaled - preds
     model.to("cpu")
-    print("✓ Low-level abduction complete.")
+    print("Low-level abduction complete.")
     return model, U_ll_hat, r2_train_final, r2_val_final
 
 
@@ -412,7 +412,7 @@ class HLCellMeansShrunkVec:
             sums[di, ci] += zi
             cnts[di, ci, 0] += 1.0
 
-        # empirical means (with safe divide)
+        # empirical means
         means = np.divide(sums, np.maximum(cnts, 1.0))
 
         # additive baseline
@@ -478,7 +478,7 @@ def abduce_hl_noise_cellmeans_vec(
     r2_tr = r2_score(Z_tr, Z_tr_pred, multioutput="variance_weighted")
 
     print(
-        f"✓ High-level abduction (vector cell-means + shrinkage). "
+        f"High-level abduction (vector cell-means + shrinkage). "
         f"λ={best_lam} | train R²={r2_tr:.4f} | val R²={best_val_r2:.4f}"
     )
 
@@ -511,7 +511,7 @@ def train_models(
     hl_obs = Dhl_z.get("obs", next(iter(Dhl_z.values())))
 
     print("\n" + "=" * 60)
-    print("TRAINING COLOR MNIST MODELS (Xia-encoder version)")
+    print("TRAINING COLOR MNIST MODELS")
     print("=" * 60)
 
     # ---------------- HL MODEL ----------------
@@ -541,7 +541,7 @@ def train_models(
     print("=" * 60)
     print(f"[HL] R² — train: {r2_hl_tr:.4f} | val: {r2_hl_val:.4f} | λ={lam:g}")
     print(f"[LL] R² — train: {r2_ll_tr:.4f} | val: {r2_ll_val:.4f}")
-    print("✓ Both models trained and saved. Ready for abstraction experiments.\n")
+    print("Both models trained and saved.\n")
 
     return ll_model_unet, hl_model, U_ll_hat, U_hl_hat, r2_hl_tr, r2_hl_val, r2_ll_tr, r2_ll_val
 
@@ -549,7 +549,7 @@ def train_models(
 def main():
     p = argparse.ArgumentParser(
         description=(
-            "Train ColorMNIST models on a Xia-aligned dataset folder.\n"
+            "Train ColorMNIST models.\n"
             "Folder must contain: dll_samples.pkl, dhl_samples_z.pkl, intervention_mapping.pkl"
         )
     )
@@ -577,14 +577,14 @@ def main():
     in_dir = args.input_dir
     out_dir = args.save_dir or in_dir
 
-    print("ColorMNIST Model Training Pipeline (Xia-encoder version)")
+    print("ColorMNIST Model Training Pipeline")
     print("=" * 50)
     set_global_seed(args.seed)
 
     Dll_samples = torch.load(os.path.join(in_dir, "dll_samples.pkl"))
     Dhl_samples_z = torch.load(os.path.join(in_dir, "dhl_samples.pkl"))
     omega = torch.load(os.path.join(in_dir, "intervention_mapping.pkl"))
-    _ = omega  # kept for compatibility; not used directly here
+    _ = omega  
 
     (
         ll_model,
@@ -609,7 +609,6 @@ def main():
     print("=" * 60)
     print(f"[HL] R² — train: {r2_hl_tr:.4f} | val: {r2_hl_val:.4f}")
     print(f"[LL] R² — train: {r2_ll_tr:.4f} | val: {r2_ll_val:.4f}")
-    print("You can now use these models for causal abstraction experiments on z.")
     return ll_model, hl_model, U_ll_hat, U_hl_hat
 
 

@@ -1,15 +1,4 @@
 #!/usr/bin/env python3
-"""
-Config-driven optimization for LUCAS-style packs (general_optimization.py)
---------------------------------------------------------------------------
-Works with the output of lucas_nonlinear_generator.py.
-Reads hyperparameters from YAML configs in the 'configs/' directory.
-Allows CLI overrides for quick testing.
-
-Usage:
-  python general_optimization.py --experiment lucas --config-dir configs
-"""
-
 import os
 import argparse
 import joblib
@@ -87,7 +76,6 @@ def compute_empirical_radius(N, eta=0.05, c1=10.0, c2=1.0, alpha=2.0, m=1):
 
 def empirical_objective(T, U_ll, U_hl, Theta_ll, Phi_hl, det_ll_dict, det_hl_dict, omega):
     device = T.device
-    # FIX: Explicit float32 casting
     U_ll = U_ll.to(device, dtype=torch.float32)
     U_hl = U_hl.to(device, dtype=torch.float32)
     Theta_ll = Theta_ll.to(device, dtype=torch.float32)
@@ -122,7 +110,6 @@ def run_minmax_optimization(U_L, U_H, det_ll, det_hl, omega, config, epsilon, de
     l_full, h_full = U_L.shape[1], U_H.shape[1]
     
     # Init T
-    # ALWAYS init random first to break symmetry
     T = torch.randn(h_full, l_full, requires_grad=True, device=device, dtype=torch.float32)
     
     # Apply Xavier gain if specified
@@ -133,7 +120,6 @@ def run_minmax_optimization(U_L, U_H, det_ll, det_hl, omega, config, epsilon, de
     robust = (epsilon > 0 or delta > 0)
     method_label = 'DiRoCA' if robust else 'GradCA'
     
-    # Initialization config strictly applies to Adversaries (Theta), NOT T
     init_type = opt_cfg.get('initialization', 'random')
     
     # GradCA (robust=False) -> Theta/Phi remain 0 (Nominal Objective)
@@ -146,7 +132,7 @@ def run_minmax_optimization(U_L, U_H, det_ll, det_hl, omega, config, epsilon, de
         Theta = torch.randn_like(torch.as_tensor(U_L), requires_grad=robust, device=device, dtype=torch.float32)
         Phi = torch.randn_like(torch.as_tensor(U_H), requires_grad=robust, device=device, dtype=torch.float32)
 
-    # Debug print for GradCA to confirm params
+    # Debug 
     if not robust:
         print(f"DEBUG: GradCA Running with eta={opt_cfg['eta_min']}, tol={opt_cfg['tol']}, gain={opt_cfg.get('gain', 0.0)}")
 
@@ -276,7 +262,7 @@ def main():
     parser.add_argument('--gradca-max-iter', type=int, default=None)
     parser.add_argument('--gradca-eta-min', type=float, default=None)
     parser.add_argument('--gradca-tol', type=float, default=None)
-    parser.add_argument('--gradca-gain', type=float, default=None)  # <--- ADDED THIS FLAG
+    parser.add_argument('--gradca-gain', type=float, default=None)  
     
     parser.add_argument('--diroca-max-iter', type=int, default=None)
     parser.add_argument('--baryca-max-iter', type=int, default=None)

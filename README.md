@@ -1,90 +1,223 @@
-# Distributionally Robust Causal Abstractions
+# Distributionally Robust Causal Abstractions (DiRoCA)
 
-This repository contains the implementation and evaluation framework for Distributionally Robust Causal Abstractions (DiRoCA) paper.
+This repository contains the implementation and evaluation framework for the paper **"Distributionally Robust Causal Abstractions"**.
 
 ## Quick Start
 
 ### Installation
 
-1. Clone the repository:
+1. **Clone the repository:**
+   ```bash
+   git clone https://github.com/yfelekis/DiRoCA.git
+   cd DiRoCA
+   ```
+
+2. **Install dependencies:**
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+## Experiments
+
+The repository supports three main experimental settings: Linear (Synthetic), Non-Linear (nLUCAS & EBM), and High-Dimensional (Colored MNIST).
+
+### 1. Linear Experiments
+
+Standard synthetic experiments testing Gaussian vs. Empirical optimization. This category includes datasets with linear causal mechanisms.
+
+#### Simple Lung Cancer (SLC)
+
+The **SLC** dataset models causal relationships between three continuous variables: **S** (Smoking), **T** (Tar deposition), and **C** (Cancer). The low-level model has the structure S → T → C, while the high-level abstraction removes the intermediate variable T, resulting in a direct causal link S' → C'. The experiment includes 6 distinct low-level binary interventions mapped to 3 high-level interventions via the map $\omega$.
+
+**Generate Data:**
 ```bash
-git clone https://github.com/yfelekis/DiRoCA.git
-cd DiRoCA
+python generate_data.py --experiment slc
 ```
 
-2. Install dependencies:
+**Run Optimization (Choose one):**
 ```bash
-pip install -r requirements.txt
+# Parametric (Gaussian) assumption
+python gauss_optimization.py --experiment slc
+
+# Non-parametric (Empirical) approach
+python empirical_optimization.py --experiment slc
 ```
 
-### Basic Usage
-
-1. **Generate data** for experiments:
+**Run Evaluation:**
 ```bash
-python generate_data.py --experiment {experiment}
+# If using Gaussian optimization
+python run_evaluation.py --experiment slc
+
+# If using Empirical optimization
+python run_empirical_evaluation.py --experiment slc
 ```
-Creates synthetic low-level and high-level Structural Causal Models (SCMs) and prepares cross-validation folds for experiments.
 
+#### Linearized LUCAS (LiLUCAS)
 
-2. **Run optimization** (choose one approach):
+The **LiLUCAS** dataset uses linear mechanisms to model lung cancer diagnosis scenarios. The low-level model involves six continuous variables: **SM** (Smoking), **GE** (Genetics), **LC** (Lung Cancer), **AL** (Allergy), **CO** (Coughing), and **FA** (Fatigue). The high-level abstraction groups these into three broader concepts: **EN'** (Environment), **GE'** (Genetics), and **LC'** (Lung Cancer). The experiment utilizes 21 relevant binary low-level interventions (including observational) mapped to 11 high-level interventions.
+
+**Generate Data:**
 ```bash
-# Gaussian optimization
-python gauss_optimization.py --experiment {experiment}
-
-# Empirical optimization  
-python empirical_optimization.py --experiment {experiment}
+python generate_data.py --experiment lilucas
 ```
-Learns abstraction mappings between low-level and high-level models using either a parametric Gaussian assumption or a fully non-parametric empirical approach.
 
-
-3. **Run evaluation**:
+**Run Optimization (Choose one):**
 ```bash
-# Gaussian evaluation
-python run_evaluation.py --experiment {experiment}
+# Parametric (Gaussian) assumption
+python gauss_optimization.py --experiment lilucas
 
-# Empirical evaluation
-python run_empirical_evaluation.py --experiment {experiment}
+# Non-parametric (Empirical) approach
+python empirical_optimization.py --experiment lilucas
 ```
-Computes abstraction errors across varying contamination levels and noise scales to assess robustness.
 
-
-4. **Analyze results** using the provided notebooks:
+**Run Evaluation:**
 ```bash
-jupyter notebook huber_analysis.ipynb
-jupyter notebook contamination_analysis.ipynb
-```
-Provides visual and quantitative analysis of method performance under distributional shifts and structural misspecifications.
+# If using Gaussian optimization
+python run_evaluation.py --experiment lilucas
 
+# If using Empirical optimization
+python run_empirical_evaluation.py --experiment lilucas
+```
+
+**Analyze Results:**
+Open `huber_analysis.ipynb` or `contamination_analysis.ipynb` to visualize performance.
+
+### 2. Non-Linear Experiments (nLUCAS & EBM)
+
+Experiments involving non-linear mechanisms or real-world data.
+
+#### nLUCAS (Non-Linear LUCAS)
+
+The **nLUCAS** dataset shares the same causal structure and abstraction logic as LiLUCAS but employs non-linear relationships in the low-level model. The low-level model involves the same six variables (**SM**, **GE**, **LC**, **AL**, **CO**, **FA**), which are abstracted to the same three high-level concepts (**EN'**, **GE'**, **LC'**). Unlike LiLUCAS, nLUCAS employs a subset of 11 low-level interventions while keeping the same 11 high-level interventions.
+
+**Generate Data:**
+```bash
+python generate_data_nlucas.py
+```
+
+**Optimization:**
+```bash
+python general_optimization.py --experiment nlucas
+```
+
+**Evaluation:**
+```bash
+python run_general_evaluation.py --experiment nlucas
+```
+
+**Analysis:**
+Run the notebook `huber_lucas.ipynb` to inspect robustness curves.
+
+#### Electric Battery Manufacturing (EBM)
+
+The **EBM** dataset applies the framework to a real-world scenario involving lithium-ion battery production. The dataset contains data from two experimental settings representing different levels of granularity: the low-level setting (WMG) captures the effect of a control variable (Comma Gap, **CG**) on Mass Loading outputs (**ML₁**, **ML₂**) at two distinct spatial locations, while the high-level setting (LRCS) relates the same control variable to a single aggregated output (**ML**). The low-level variables are $\mathbf{X}_L = [\text{CG}, \text{ML}_1, \text{ML}_2]^\top$, and the high-level variables are $\mathbf{X}_H = [\text{CG}, \text{ML}]^\top$. The framework uses parametric Additive Noise Models (ANMs) with linear mechanisms to fit both datasets, performing exact abduction to recover noise terms. Interventions correspond to setting the Comma Gap to specific continuous values (e.g., 75, 100, 200 μm).
+
+**Data Preparation:**
+```bash
+python generate_data_battery.py
+```
+
+**Optimization:**
+```bash
+python battery_optimization.py
+```
+
+**Evaluation:**
+```bash
+python run_battery_evaluation.py
+```
+
+**Analysis:**
+Run the notebook `huber_battery.ipynb`.
+
+### 3. High-Dimensional Experiment (Colored MNIST)
+
+A complex vision task testing the framework on a high-dimensional, non-linear scenario. The objective is to learn a robust **linear** abstraction $\lintau$ that aligns a complex pixel-level SCM with a disentangled latent-space SCM. Both levels operate on the same graph structure with parents **D** (Digit) and **C** (Color), which are correlated ($p=0.85$). The low-level target $X^\ell$ is instantiated as the high-dimensional image $I_P \in \mathbb{R}^{3072}$, while the high-level target $X^h$ is the compact latent code $z \in \mathbb{R}^{64}$ obtained via a pre-trained encoder $E_\phi$ from Xia et al. (2024). The experiment utilizes a set of 10 distinct interventions alongside observational data, including atomic interventions (e.g., $\text{do}(D=6)$) and joint interventions (e.g., $\text{do}(D=4, C=4)$) that break spurious correlations present in the observational distribution.
+
+**SCM Construction:**
+- **Low-Level Model ($f_L$):** U-Net with FiLM (Feature-wise Linear Modulation) layers that take a grayscale "Shape" image as input and inject causal control via parents $(D, C)$.
+- **High-Level Model ($f_H$):** Vector-valued cell-means model that fits a deterministic vector $m_{d,c}$ for each $(d,c)$ combination in the discrete $10 \times 10$ parent space, with shrinkage regularization for robustness.
+
+**Prerequisite:** Ensure `rep_encoder_only_traced.pt` (the pre-trained encoder) is available in your directory (see `generate_data_cmnist.py`).
+
+**Generate Data:**
+Generates the synthetic Colored MNIST dataset and extracts ground-truth latents using the pre-trained encoder.
+```bash
+python generate_data_cmnist.py
+```
+
+**Fit Abduction Models:**
+Trains the Low-Level U-Net and High-Level Vector-Means models to abduce noise residuals.
+```bash
+python cmnist_fit_models.py
+```
+
+**Run Optimization (DiRoCA):**
+Learns the robust abstraction map $\tau$ using the abduced residuals.
+```bash
+python cmnist_optimization.py
+```
+
+**Evaluation & Reporting:**
+Evaluates the abstraction against Rotation, Lighting, and Noise shifts.
+Output: Generates a PDF report (e.g., `cmnist_results_final_curve.pdf`).
+```bash
+python run_cmnist_evaluation.py
+```
 
 ## Project Structure
 
 ```
-DiRoCA_TBS/
-├── README.md                                    # This file
-├── requirements.txt                             # Dependencies
-├── generate_data.py                             # Data generation script
-├── gauss_optimization.py                        # Gaussian optimization
-├── empirical_optimization.py                    # Empirical optimization
-├── run_evaluation.py                            # Gaussian evaluation
-├── run_empirical_evaluation.py                  # Empirical evaluation
-├── huber_analysis.ipynb                         # Main analysis notebook
-├── contamination_analysis.ipynb                 # Contamination analysis
-├── configs/                                     # Configuration files
-│   ├── *_opt_config_{experiment}.yaml           # Gaussian optimization configs
-│   └── *_opt_config_empirical_{experiment}.yaml # Empirical optimization configs
-│   ├── lilucas_config.yaml                      # LiLucas experiment config
-│   └── slc_config.yaml                          # SLC experiment config
-├── data/                                        # Generated data and results
-│   └── {experiment}/
-│       ├── cv_folds.pkl
-│       ├── LLmodel.pkl
-│       ├── HLmodel.pkl
-│       ├── results/                   # Gaussian results
-│       ├── results_empirical/         # Empirical results
-│       └── evaluation_results/        # Evaluation outputs
-├── plots/                             # Generated visualizations
-```
+DiRoCA/
+├── README.md                           # This file
+├── requirements.txt                    # Project dependencies
+├── configs/                            # Configuration YAML files
+├── third_party/                        # External dependencies (Xia et al. encoder)
+├── plots/                              # Saved visualization plots
+├── archive/                            # Archived scripts/results
 
+# --- Linear Experiments ---
+├── generate_data.py                    # Data generation for linear SCMs
+├── gauss_optimization.py               # Optimization using Gaussian ansatz
+├── empirical_optimization.py           # Optimization using Empirical distribution
+├── run_evaluation.py                   # Evaluation for Gaussian pipeline
+├── run_empirical_evaluation.py         # Evaluation for Empirical pipeline
+├── huber_analysis.ipynb                # Analysis notebook for linear experiments
+├── contamination_analysis.ipynb        # Analysis of contamination effects
+
+# --- Non-Linear Experiments (nLUCAS) ---
+├── generate_data_nlucas.py             # NLucas data generation
+├── general_optimization.py             # Optimization script for NLucas/General cases
+├── run_general_evaluation.py           # Evaluation script for NLucas/General cases
+├── huber_lucas.ipynb                   # NLucas results analysis
+
+# --- Real-World Surrogate (EBM) ---
+├── generate_data_battery.py            # Battery dataset preparation
+├── battery_optimization.py             # Battery experiment optimization
+├── run_battery_evaluation.py           # Battery experiment evaluation
+├── battery_evaluation.ipynb            # Additional battery eval notebook
+├── huber_battery.ipynb                 # Battery results analysis
+
+# --- Vision Experiments (CMNIST) ---
+├── generate_data_cmnist.py             # CMNIST generation & encoder extraction
+├── cmnist_fit_models.py                # Fits f_L (U-Net) and f_H (Cell-Means)
+├── cmnist_optimization.py              # DiRoCA optimization for CMNIST
+├── run_cmnist_evaluation.py            # Generates PDF report for shifts (Rotation/Lighting)
+├── cmnist_opt_new.ipynb                # Optimization prototyping notebook
+├── cmnist_shifts_visualization.ipynb   # Visualization of camera shifts
+├── cmnist_results_final_curve.pdf      # Sample evaluation report
+
+# --- Utilities & Shared Modules ---
+├── models.py                           # Neural network architectures
+├── operations.py                       # Causal interventions logic
+├── opt_tools.py                        # Optimization solvers
+├── math_utils.py                       # Mathematical helper functions
+├── utilities.py                        # General IO and logging utils
+├── evaluation_utils.py                 # Metrics and plotting helpers
+├── load_encoder.py                     # Helper to load Xia et al. encoder
+├── make_folds.py                       # Cross-validation utility
+└── load_models_cell.py                 # Loading utilities for cell-based models
+```
 
 ## Citation
 

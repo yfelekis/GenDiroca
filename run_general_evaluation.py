@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-"""
-General empirical evaluation (nonlinear-ready).
-Supports dual modes: 'standard' (Generalization) and 'counterfactual' (Consistency).
-"""
 
 import argparse
 import numpy as np
@@ -98,7 +94,7 @@ def load_pack(experiment):
     eta0 = omega.get(iota0, 'eta0')
     if eta0 not in pack['hl']: eta0 = 'eta0'
     
-    # Shared observational noise (for Counterfactual mode)
+    # Shared observational noise 
     U_ll_obs = pack["ll"][iota0]["U"]
     U_hl_obs = pack["hl"][eta0]["U"]
     
@@ -124,7 +120,7 @@ def load_results(experiment):
     if os.path.exists(p):
         results["BaryCA"] = joblib.load(p)
         
-    # 3. DiRoCA (Nested)
+    # 3. DiRoCA 
     p = os.path.join(base, "diroca_cv_results_empirical.pkl")
     if os.path.exists(p):
         data = joblib.load(p)
@@ -135,7 +131,7 @@ def load_results(experiment):
                 sliced = {f: {rk: v[rk]} for f, v in data.items() if rk in v}
                 results[mname] = sliced
 
-    # 4. Abs-LiNGAM (Nested)
+    # 4. Abs-LiNGAM 
     p = os.path.join(base, "abslingam_cv_results_empirical.pkl")
     if os.path.exists(p):
         data = joblib.load(p)
@@ -252,16 +248,14 @@ def run_evaluation(experiment="lucas", alpha_values=None, noise_levels=None, num
     out_dir = os.path.join("data", experiment, "evaluation_results")
     os.makedirs(out_dir, exist_ok=True)
     
-    # Construct filename with mode
     if output_file is None:
         timestamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
         fname = (f"empirical_evaluation_{shift_type}_{distribution}_"
-                 f"mode_{mode}_"  # <--- Added mode to filename
+                 f"mode_{mode}_"  
                  f"alpha{len(alpha_values)}_noise{len(noise_levels)}_"
                  f"trials{num_trials}_{timestamp}.csv")
         output_file = os.path.join(out_dir, fname)
     else:
-        # Inject mode into provided filename if not present
         base = os.path.basename(output_file)
         if mode not in base:
             name, ext = os.path.splitext(base)
@@ -288,7 +282,7 @@ def main():
     parser.add_argument("--shift_type", default="additive")
     parser.add_argument("--distribution", default="gaussian")
     
-    # New Argument: Mode selection
+    # Mode selection
     parser.add_argument("--eval_mode", type=str, default="both", 
                         choices=["standard", "counterfactual", "both"],
                         help="Evaluation protocol. 'standard' uses raw samples (generalization). 'counterfactual' uses shared noise (consistency).")

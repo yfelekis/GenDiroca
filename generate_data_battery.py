@@ -9,13 +9,11 @@ import pandas as pd
 import joblib
 import networkx as nx
 from sklearn.linear_model import LinearRegression
-from models import LinearAddSCM, CausalBayesianNetwork, Intervention  # noqa: F401
-# pgmpy imports left for compatibility, not used directly
-from pgmpy.models import BayesianNetwork as BN  # noqa: F401
-from pgmpy.factors.discrete import TabularCPD as cpd  # noqa: F401
+from models import LinearAddSCM, CausalBayesianNetwork, Intervention  
+from pgmpy.models import BayesianNetwork as BN  
+from pgmpy.factors.discrete import TabularCPD as cpd  
 
 warnings.filterwarnings("ignore")
-
 
 # -------------------------------
 # CONFIG
@@ -23,7 +21,6 @@ warnings.filterwarnings("ignore")
 def _load_config(config_path: str = "configs/battery_config.yaml") -> Dict[str, Any]:
     with open(config_path, "r") as f:
         return yaml.safe_load(f)
-
 
 # -------------------------------
 # UTILITIES
@@ -48,9 +45,6 @@ def _parents_map(graph: nx.DiGraph, node_order: List[str]) -> Dict[str, List[str
     return p
 
 
-# -------------------------------
-# IO + FRAMING
-# -------------------------------
 def _load_graphs_and_dfs(config: Dict[str, Any]) -> Tuple[nx.DiGraph, nx.DiGraph, pd.DataFrame, pd.DataFrame]:
     """Load LL/HL DAGs and raw dataframes, then normalize headers and rename columns from config."""
     data_paths = config["data_paths"]
@@ -82,7 +76,7 @@ def _load_graphs_and_dfs(config: Dict[str, Any]) -> Tuple[nx.DiGraph, nx.DiGraph
         df_base_raw = joblib.load(P_DF_BASE)
         df_abst_raw = joblib.load(P_DF_ABST)
 
-    # Normalize headers (trim whitespace)
+    # Normalize headers 
     df_base_raw.columns = df_base_raw.columns.str.strip()
     df_abst_raw.columns = df_abst_raw.columns.str.strip()
 
@@ -94,7 +88,7 @@ def _load_graphs_and_dfs(config: Dict[str, Any]) -> Tuple[nx.DiGraph, nx.DiGraph
     ll_raw_cols = ["CG"] + list(ll_rename.keys())
     hl_raw_cols = list(hl_rename.keys())
 
-    # Select by raw names (after strip) then rename → canonical names
+    # Select by raw names (after strip) then rename --> canonical names
     try:
         df_base = df_base_raw[ll_raw_cols].rename(columns=ll_rename)
     except KeyError as e:
@@ -107,7 +101,7 @@ def _load_graphs_and_dfs(config: Dict[str, Any]) -> Tuple[nx.DiGraph, nx.DiGraph
         missing = [c for c in hl_raw_cols if c not in df_abst_raw.columns]
         raise KeyError(f"HL columns missing in raw dataframe: {missing}") from e
 
-    # Ensure numeric types early (fail fast if not numeric)
+    # Ensure numeric types early
     for c in df_base.columns:
         df_base[c] = pd.to_numeric(df_base[c], errors="raise")
     for c in df_abst.columns:
@@ -272,7 +266,7 @@ def _compute_D_per_iv(model_dict: dict, coeffs: dict, intercepts: dict) -> Dict[
                 betas = np.array([coeffs[(p, child)] for p in pa], dtype=float)
                 D[:, j] = b0 + X_pa @ betas
             else:
-                # fallback (rare)
+                # fallback
                 lr = LinearRegression(fit_intercept=True).fit(X_pa, X[:, j])
                 D[:, j] = lr.intercept_ + X_pa @ lr.coef_.astype(float)
 
@@ -353,7 +347,7 @@ def load_and_prepare_battery(save: bool = True, config_path: str = "configs/batt
     rng = np.random.default_rng(seed)
     tol = float(config.get("alignment", {}).get("tolerance", 1e-9))
 
-    # LL per-intervention (build indices first, then sample with replacement if needed)
+    # LL per-intervention 
     for cg_ll in _cg_values("low_level"):
         iv = ll_interventions[cg_ll]
         base_idx = np.where(np.isclose(CG_ll_aligned, float(cg_ll), atol=tol))[0]
@@ -405,7 +399,7 @@ def load_and_prepare_battery(save: bool = True, config_path: str = "configs/batt
             Uc[:, hl_cg_idx] = 0.0
         Dhl_noise[iv] = Uc
 
-    # Package causal graphs (edges from fitted coeffs)
+    # Package causal graphs
     ll_causal_graph = CausalBayesianNetwork(list(ll_coeffs.keys()))
     hl_causal_graph = CausalBayesianNetwork(list(hl_coeffs.keys()))
 
@@ -429,7 +423,7 @@ def load_and_prepare_battery(save: bool = True, config_path: str = "configs/batt
         "node_order": HL_NODES,
     }
 
-    # Deterministic parts per intervention (with do-semantics + roots handled)
+    # Deterministic parts per intervention 
     det_ll_dict = _compute_D_per_iv(LLmodel, ll_coeffs, ll_intercepts)
     det_hl_dict = _compute_D_per_iv(HLmodel, hl_coeffs, hl_intercepts)
 
@@ -454,7 +448,6 @@ def load_and_prepare_battery(save: bool = True, config_path: str = "configs/batt
     }
     abstraction_data = {"T": None, "omega": omega}
 
-    # QC: sample sizes per intervention (optional)
     if config.get("quality_control", {}).get("print_sample_sizes", False):
         def _count(buckets: Dict[Any, np.ndarray]) -> Dict[str, int]:
             out = {}
@@ -490,4 +483,4 @@ def load_and_prepare_battery(save: bool = True, config_path: str = "configs/batt
 
 if __name__ == "__main__":
     bundles = load_and_prepare_battery(save=True)
-    print("Battery data generation completed successfully!")
+    print("EBM data generation completed successfully!")
