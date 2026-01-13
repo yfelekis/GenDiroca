@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-"""
-Helper to load evaluation results.
-"""
-
 import pandas as pd
 import glob
 import os
@@ -17,9 +13,7 @@ def parse_evaluation_filename(filename):
     - evaluation_additive_gaussian_alpha10-0.0-1.0_noise20-0.0-10.0_trials20_zero_meanTrue_20241201_143022.csv
     - empirical_evaluation_additive_gaussian_alpha5-0.0-1.0_noise5-0.0-10.0_trials2_zero_meanTrue_20241201_143022.csv
     """
-    # Pattern for both regular and empirical evaluations
-    # pattern = r'(empirical_)?evaluation_(\w+)_(\w+)_alpha(\d+)-([\d.]+)-([\d.]+)_noise(\d+)-([\d.]+)-([\d.]+)_trials(\d+)_zero_mean(\w+)_(\d{8})_(\d{6})\.csv'
-    # AFTER
+
     pattern = r'(empirical_)?evaluation_(\w+)_([\w-]+)_alpha(\d+)-([\d.]+)-([\d.]+)_noise(\d+)-([\d.]+)-([\d.]+)_trials(\d+)_zero_mean(\w+)_(\d{8})_(\d{6})\.csv'
     match = re.match(pattern, filename)
     

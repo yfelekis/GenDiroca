@@ -1,4 +1,3 @@
-# You'll need this import
 from sklearn.linear_model import LinearRegression, Ridge
 from sklearn.model_selection import KFold
 import networkx as nx  
@@ -22,7 +21,6 @@ def get_coefficients(data, G, return_noise=False, use_ridge=False, alpha=1.0):
     nodes = list(G.nodes)
     coeffs = {}
     
-    # Initialize noise matrix with the data; we'll subtract predictions later
     noise = data.copy()
 
     for node in nx.topological_sort(G):
@@ -30,18 +28,15 @@ def get_coefficients(data, G, return_noise=False, use_ridge=False, alpha=1.0):
         if not parents:
             continue
             
-        # Prepare regression data
         node_idx = nodes.index(node)
         parent_indices = [nodes.index(p) for p in parents]
         
         y = data[:, node_idx]
         X = data[:, parent_indices]
         
-        # Fit regression
         model = Ridge(alpha=alpha) if use_ridge else LinearRegression()
         model.fit(X, y)
         
-        # Store coefficients
         for parent, coef in zip(parents, model.coef_):
             coeffs[(parent, node)] = coef
             
@@ -71,20 +66,6 @@ def compute_radius_lb(N, eta, c):
     return np.log(c / eta) / np.sqrt(N)
 
 def compute_empirical_radius(N, eta, c1=1.0, c2=1.0, alpha=2.0, m=3):
-    """
-    Compute epsilon_N(eta) for empirical Wasserstein case.
-
-    Parameters:
-    - N: int, number of samples
-    - eta: float, confidence level (0 < eta < 1)
-    - c1: float, constant from theorem (default 1.0, adjust if needed)
-    - c2: float, constant from theorem (default 1.0, adjust if needed)
-    - alpha: float, light-tail exponent (P[exp(||ξ||^α)] ≤ A)
-    - m: int, ambient dimension
-
-    Returns:
-    - epsilon: float, the concentration radius
-    """
     assert 0 < eta < 1, "eta must be in (0,1)"
     threshold = np.log(c1 / eta) / c2
     if N >= threshold:
@@ -96,23 +77,6 @@ def compute_empirical_radius(N, eta, c1=1.0, c2=1.0, alpha=2.0, m=3):
     return epsilon
 
 def calculate_abstraction_error(T_matrix, Dll_test, Dhl_test):
-    """
-    Calculates the abstraction error for a given T matrix on a test set.
-
-    This function works in the space of distribution parameters:
-    1. It estimates Gaussian parameters (mean, cov) from the LL and HL test samples.
-    2. It transforms the LL Gaussian's parameters using the T matrix.
-    3. It computes the Wasserstein distance between the transformed LL distribution
-       and the actual HL distribution.
-    
-    Args:
-        T_matrix (np.ndarray): The learned abstraction matrix.
-        Dll_test (np.ndarray): The low-level endogenous test samples.
-        Dhl_test (np.ndarray): The high-level endogenous test samples.
-        
-    Returns:
-        float: The calculated Wasserstein-2 distance.
-    """
     # 1. Estimate parameters from the low-level test data
     mu_L_test    = np.mean(Dll_test, axis=0)
     Sigma_L_test = np.cov(Dll_test, rowvar=False)
@@ -137,19 +101,6 @@ def calculate_abstraction_error(T_matrix, Dll_test, Dhl_test):
 
 
 def calculate_empirical_error(T_matrix, Dll_test, Dhl_test, metric='fro'):
-    """
-    Calculates the abstraction error directly on the endogenous data samples
-    by computing a matrix norm between the transformed LL data and the HL data.
-    
-    Args:
-        T_matrix (np.ndarray): The learned abstraction matrix.
-        Dll_test (np.ndarray): The low-level endogenous test samples.
-        Dhl_test (np.ndarray): The high-level endogenous test samples.
-        metric (str): The distance metric to use (e.g., 'fro', 'l1', 'nuclear').
-        
-    Returns:
-        float: The calculated empirical distance.
-    """
     if Dll_test.shape[0] == 0 or Dhl_test.shape[0] == 0:
         return np.nan # Cannot compute error on empty data
 
@@ -177,7 +128,6 @@ def load_all_data(experiment_name):
         if not os.path.exists(filepath):
             raise FileNotFoundError(f"Pickle file not found: {filepath}")
         
-        # Check if file is a Git LFS pointer (starts with "version https://git-lfs")
         try:
             with open(filepath, 'rb') as f:
                 first_bytes = f.read(50)
@@ -237,22 +187,18 @@ def prepare_cv_folds(observational_data, k, random_state, save_path):
 
 def assemble_fold_parameters(fold_indices, all_data, hyperparameters):
     """Assembles the final opt_params dictionary for a specific fold."""
-    # Start with the general hyperparameters
     opt_params = hyperparameters.copy()
 
-    # Add the core models and mappings
     opt_params['LLmodels']      = all_data['LLmodel'].get('scm_instances')
     opt_params['HLmodels']      = all_data['HLmodel'].get('scm_instances')
     opt_params['omega']         = all_data['abstraction_data']['omega']
     opt_params['experiment']    = all_data['experiment_name']
     opt_params['initial_theta'] = 'empirical'
     
-    # Calculate fold-specific radius
     train_n  = len(fold_indices['train'])
     ll_bound = round(compute_radius_lb(N=train_n, eta=0.05, c=1000), 3)
     hl_bound = round(compute_radius_lb(N=train_n, eta=0.05, c=1000), 3)
 
-    # Add the final theta parameters
     opt_params['theta_hatL'] = {
                                     'mu_U': all_data['LLmodel']['noise_dist']['mu'], 
                                     'Sigma_U': all_data['LLmodel']['noise_dist']['sigma'], 
@@ -270,21 +216,17 @@ def assemble_barycentric_parameters(fold_info, all_data, baryca_hyperparams):
     """
     Assembles the final arguments dictionary specifically for barycentric_optimization.
     """
-    # 1. Start with the specific hyperparameters for this algorithm
     opt_args = baryca_hyperparams.copy()
 
-    # 2. Add the required model and data components
     opt_args['LLmodels'] = all_data['LLmodel'].get('scm_instances')
     opt_args['HLmodels'] = all_data['HLmodel'].get('scm_instances')
     opt_args['Ill'] = all_data['LLmodel']['intervention_set']
     opt_args['Ihl'] = all_data['HLmodel']['intervention_set']
     
-    # 3. Calculate fold-specific radius
     train_n  = len(fold_info['train'])
     ll_bound = round(compute_radius_lb(N=train_n, eta=0.05, c=1000), 3)
     hl_bound = round(compute_radius_lb(N=train_n, eta=0.05, c=1000), 3)
 
-    # 4. Add the theta parameters
     opt_args['theta_L'] = {
         'mu_U': all_data['LLmodel']['noise_dist']['mu'], 
         'Sigma_U': all_data['LLmodel']['noise_dist']['sigma'], 
@@ -302,10 +244,8 @@ def assemble_empirical_parameters(U_ll_train, U_hl_train, all_data, empirical_hy
     """
     Assembles the final arguments dictionary specifically for the empirical optimization.
     """
-    # 1. Start with the specific hyperparameters for this algorithm
     opt_args = empirical_hyperparams.copy()
 
-    # 2. Add the required model and data components
     opt_args['U_L'] = U_ll_train
     opt_args['U_H'] = U_hl_train
     opt_args['L_models'] = all_data['LLmodel'].get('scm_instances')
@@ -351,7 +291,6 @@ def print_distribution_summary(final_params, initial_params, name=""):
 def plot_marginal_distributions(final_params, initial_params, var_names, model_name=""):
     """Plots a comparison of the 1D marginals for each variable."""
     
-    # Set LaTeX font
     plt.rcParams.update({
         "text.usetex": True,
         "font.family": "serif",
@@ -419,7 +358,6 @@ def create_optimization_animation(monitor, initial_params, var_names, model_leve
     if n_vars == 1: axes = [axes]
     fig.suptitle(f'Evolution of Worst-Case Distribution ({model_level} model)', fontsize=16)
 
-    # This function will be called for each frame of the animation
     def update(epoch):
         for i in range(n_vars):
             ax = axes[i]
@@ -444,27 +382,16 @@ def create_optimization_animation(monitor, initial_params, var_names, model_leve
             ax.set_ylim(bottom=0)
             ax.legend()
     
-    # Create the animation
     ani = FuncAnimation(fig, update, frames=num_epochs, blit=False, repeat=False)
     
-    # Save the animation as a GIF
     print(f"Saving animation to {filename}...")
     ani.save(filename, writer='pillow', fps=5)
-    plt.close() # Prevent static plot from showing
+    plt.close() 
     print("Done.")
-    return HTML(ani.to_jshtml()) # Display animation in the notebook
+    return HTML(ani.to_jshtml()) 
 
 def load_configs(config_files):
-    """
-    Load multiple YAML configuration files.
-    
-    Args:
-        config_files (dict): Dictionary mapping variable names to config file paths
-                           e.g., {'hyperparams_diroca': 'configs/diroca_opt_config.yaml'}
-    
-    Returns:
-        dict: Dictionary with loaded configs, keys are the variable names
-    """
+
     configs = {}
     for var_name, file_path in config_files.items():
         try:

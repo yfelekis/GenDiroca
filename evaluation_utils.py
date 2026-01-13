@@ -36,13 +36,7 @@ def compute_worst_case_distance(params_worst):
 
 def condition_number(matrix):
     """
-    Computes the condition number of a matrix using the 2-norm.
-
-    Parameters:
-        matrix (np.ndarray): Input matrix (can be square or rectangular).
-
-    Returns:
-        float: The condition number of the matrix.
+    Computes the condition number of a matrix.
     """
     # Compute the singular values of the matrix
     singular_values = np.linalg.svd(matrix, compute_uv=False)
@@ -165,7 +159,6 @@ def plot_contamination_effects(original, contaminated):
         axes[1,i].set_xlabel(f'Var{i+1}')
         axes[1,i].set_ylabel(f'Var{i+2}')
     
-    # Optional: Set style for all subplots
     sns.set_style("whitegrid")
     
     plt.tight_layout()
@@ -183,7 +176,6 @@ def plot_abstraction_error(abstraction_error_dict, spacing_factor=0.2):
     # Calculate width first
     width = max(4, len(methods) * spacing_factor)
     
-    # Set style and font sizes with LaTeX
     sns.set_style("whitegrid")
     plt.rcParams.update({
         'text.usetex': True,
@@ -196,8 +188,8 @@ def plot_abstraction_error(abstraction_error_dict, spacing_factor=0.2):
         'ytick.labelsize': 10,
         'xtick.color': 'black',
         'ytick.color': 'black',
-        'figure.dpi': 300,  # Increase DPI
-        'savefig.dpi': 300,  # Increase saving DPI
+        'figure.dpi': 300,  
+        'savefig.dpi': 300,  
         'figure.figsize': (width, 5),
         'figure.facecolor': 'white',
         'figure.edgecolor': 'white',
@@ -331,7 +323,6 @@ def plot_empirical_abstraction_error(results, methods, sample_form, figsize=(12,
                 linewidth=2)
         
     
-    # Customize plot
     plt.xlabel(r'Perturbation Radius ($\varepsilon_{\ell}=\varepsilon_{h}$)', fontsize=30)
     plt.ylabel('Empirical Abstraction Error', fontsize=30)
     plt.xticks(fontsize=24)

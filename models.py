@@ -54,7 +54,6 @@ class LinearAddSCM:
         self.edge_weights = edge_weights.copy()
         self.intervention_dict = intervention.vv() if intervention else {}
 
-        # The .do() operation modifies the graph structure
         if self.intervention_dict:
             self.causal_graph = causal_graph.do(list(self.intervention_dict.keys()))
         else:
@@ -65,7 +64,6 @@ class LinearAddSCM:
         self.dim = len(self.variables)
         self.W = self._compute_weight_matrix()
 
-        # Restore the calculation for the reduced-form matrix F
         self.I = np.eye(self.dim)
         self.F = self._compute_reduced_form()
 
@@ -90,7 +88,6 @@ class LinearAddSCM:
         system E = E @ W + U.
         """
         try:
-            # The correct form is (I - W)⁻¹, with no transpose.
             return np.linalg.inv(self.I - self.W)
         
         except np.linalg.LinAlgError:
@@ -98,7 +95,6 @@ class LinearAddSCM:
             F = np.eye(self.dim)
             runsum = np.eye(self.dim)
             
-            # The power series should also be based on W, not W.T
             W_current = self.W 
             for _ in range(self.dim * 2): # Iterate more for stability
                 runsum = runsum @ W_current
@@ -141,7 +137,6 @@ class NonlinearAddSCM:
         self.functions = functions
         self.intervention_dict = intervention.vv() if intervention else {}
 
-        # The .do() operation correctly modifies the graph structure
         if self.intervention_dict:
             self.causal_graph = causal_graph.do(list(self.intervention_dict.keys()))
         else:

@@ -106,7 +106,7 @@ python run_general_evaluation.py --experiment nlucas
 ```
 
 **Analysis:**
-Run the notebook `huber_lucas.ipynb` to inspect robustness curves.
+Run the notebook `huber_lucas.ipynb`.
 
 #### Electric Battery Manufacturing (EBM)
 
@@ -132,18 +132,33 @@ Run the notebook `huber_battery.ipynb`.
 
 ### 3. High-Dimensional Experiment (Colored MNIST)
 
-A complex vision task testing the framework on a high-dimensional, non-linear scenario. The objective is to learn a robust **linear** abstraction $\lintau$ that aligns a complex pixel-level SCM with a disentangled latent-space SCM. Both levels operate on the same graph structure with parents **D** (Digit) and **C** (Color), which are correlated ($p=0.85$). The low-level target $X^\ell$ is instantiated as the high-dimensional image $I_P \in \mathbb{R}^{3072}$, while the high-level target $X^h$ is the compact latent code $z \in \mathbb{R}^{64}$ obtained via a pre-trained encoder $E_\phi$ from Xia et al. (2024). The experiment utilizes a set of 10 distinct interventions alongside observational data, including atomic interventions (e.g., $\text{do}(D=6)$) and joint interventions (e.g., $\text{do}(D=4, C=4)$) that break spurious correlations present in the observational distribution.
+A complex vision task testing the framework on a high-dimensional, non-linear scenario. The objective is to learn a robust **linear** abstraction $T$ that aligns a complex pixel-level SCM with a disentangled latent-space SCM. Both levels operate on the same graph structure with parents **D** (Digit) and **C** (Color), which are correlated ($p=0.85$). The low-level target $X^\ell$ is instantiated as the high-dimensional image $I_P \in \mathbb{R}^{3072}$, while the high-level target $X^h$ is the compact latent code $z \in \mathbb{R}^{64}$ obtained via a pre-trained encoder $E_\phi$ from Xia et al. (2024). The experiment utilizes a set of 10 distinct interventions alongside observational data, including atomic interventions (e.g., $\text{do}(D=6)$) and joint interventions (e.g., $\text{do}(D=4, C=4)$) that break spurious correlations present in the observational distribution.
 
 **SCM Construction:**
 - **Low-Level Model ($f_L$):** U-Net with FiLM (Feature-wise Linear Modulation) layers that take a grayscale "Shape" image as input and inject causal control via parents $(D, C)$.
 - **High-Level Model ($f_H$):** Vector-valued cell-means model that fits a deterministic vector $m_{d,c}$ for each $(d,c)$ combination in the discrete $10 \times 10$ parent space, with shrinkage regularization for robustness.
 
-**Prerequisite:** Ensure `rep_encoder_only_traced.pt` (the pre-trained encoder) is available in your directory (see `generate_data_cmnist.py`).
+**Prerequisite:**:This experiment requires the pre-trained encoder $E_\phi$ to generate the ground-truth latent targets. The encoder is provided as a "frozen" TorchScript artifact in checkpoints/xia_color_mnist_rep/rep_encoder_only_traced.pt.
+
+Source: The model was trained using the auto_enc_conditional objective from the Neural Causal Abstractions framework.
+
+Reproducibility: See checkpoints/TRAINING_DETAILS.md for the exact training command, hyperparameters, and the procedure used to extract this artifact.
+
+Backup: The original PyTorch Lightning checkpoint is preserved in the same directory for archival purposes.
+
+*Overall:* Ensure `rep_encoder_only_traced.pt` (the pre-trained encoder) is available in the directory (see `generate_data_cmnist.py`).
+
 
 **Generate Data:**
 Generates the synthetic Colored MNIST dataset and extracts ground-truth latents using the pre-trained encoder.
 ```bash
 python generate_data_cmnist.py
+```
+
+or
+
+```bash
+python cmnist_data_generation.py --encoder-ts checkpoints/xia_color_mnist_rep/rep_encoder_only_traced.pt
 ```
 
 **Fit Abduction Models:**
@@ -152,8 +167,7 @@ Trains the Low-Level U-Net and High-Level Vector-Means models to abduce noise re
 python cmnist_fit_models.py
 ```
 
-**Run Optimization (DiRoCA):**
-Learns the robust abstraction map $\tau$ using the abduced residuals.
+**Optimization:**
 ```bash
 python cmnist_optimization.py
 ```
@@ -175,40 +189,41 @@ DiRoCA/
 ├── third_party/                        # External dependencies (Xia et al. encoder)
 ├── plots/                              # Saved visualization plots
 ├── archive/                            # Archived scripts/results
+├── checkpoints/                        # Pre-trained model artifacts
+│   ├── model_training.md               # Documentation for pre-trained models
+│   └── xia_color_mnist_rep/            # Checkpoint subfolder
+│       ├── rep_encoder_only_traced.pt  # Frozen encoder for data generation
+│       └── epoch=961-step=225108.ckpt  # Original training checkpoint (backup)
 
 # --- Linear Experiments ---
 ├── generate_data.py                    # Data generation for linear SCMs
-├── gauss_optimization.py               # Optimization using Gaussian ansatz
+├── gauss_optimization.py               # Optimization using Gaussian distribution
 ├── empirical_optimization.py           # Optimization using Empirical distribution
 ├── run_evaluation.py                   # Evaluation for Gaussian pipeline
 ├── run_empirical_evaluation.py         # Evaluation for Empirical pipeline
 ├── huber_analysis.ipynb                # Analysis notebook for linear experiments
-├── contamination_analysis.ipynb        # Analysis of contamination effects
+├── contamination_analysis.ipynb        # Analysis notebook for linear experiments
 
 # --- Non-Linear Experiments (nLUCAS) ---
-├── generate_data_nlucas.py             # NLucas data generation
-├── general_optimization.py             # Optimization script for NLucas/General cases
-├── run_general_evaluation.py           # Evaluation script for NLucas/General cases
-├── huber_lucas.ipynb                   # NLucas results analysis
+├── generate_data_nlucas.py             # nLUCAS data generation
+├── nlucas_optimization.py              # Optimization script for nLUCAS/General cases
+├── run_general_evaluation.py           # Evaluation script for nLUCAS/General cases
+├── huber_lucas.ipynb                   # nLUCAS results analysis
 
 # --- Real-World Surrogate (EBM) ---
 ├── generate_data_battery.py            # Battery dataset preparation
 ├── battery_optimization.py             # Battery experiment optimization
 ├── run_battery_evaluation.py           # Battery experiment evaluation
-├── battery_evaluation.ipynb            # Additional battery eval notebook
 ├── huber_battery.ipynb                 # Battery results analysis
 
 # --- Vision Experiments (CMNIST) ---
 ├── generate_data_cmnist.py             # CMNIST generation & encoder extraction
 ├── cmnist_fit_models.py                # Fits f_L (U-Net) and f_H (Cell-Means)
-├── cmnist_optimization.py              # DiRoCA optimization for CMNIST
+├── cmnist_optimization.py              # Optimization for CMNIST
 ├── run_cmnist_evaluation.py            # Generates PDF report for shifts (Rotation/Lighting)
-├── cmnist_opt_new.ipynb                # Optimization prototyping notebook
-├── cmnist_shifts_visualization.ipynb   # Visualization of camera shifts
-├── cmnist_results_final_curve.pdf      # Sample evaluation report
 
 # --- Utilities & Shared Modules ---
-├── models.py                           # Neural network architectures
+├── models.py                           # Model architectures
 ├── operations.py                       # Causal interventions logic
 ├── opt_tools.py                        # Optimization solvers
 ├── math_utils.py                       # Mathematical helper functions
@@ -224,10 +239,10 @@ DiRoCA/
 If you use this code in your research, please cite:
 
 ```bibtex
-@article{diroca2025,
+@article{diroca2026,
   title={Distributionally Robust Causal Abstractions},
   author={Felekis, Yorgos and Damoulas, Theodoros and Giampouras, Paris},
   journal={arXiv preprint},
-  year={2025}
+  year={2026}
 }
 ```

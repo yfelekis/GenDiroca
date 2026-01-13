@@ -58,7 +58,7 @@ def make_repo_importable(repo_path: str):
     if missing:
         raise FileNotFoundError(
             f"Missing MNIST files in {mnist_dir}: {missing}\n"
-            f"Put the four IDX files there (uncompressed)."
+            f"Put IDX files there."
         )
 
 # -----------------------
@@ -77,7 +77,7 @@ def build_representation_model(img_size: int):
         def __init__(self, keys): self.pa = {k: [] for k in keys}
     cg = _CG(v_type.keys())
 
-    # Hyperparams must match training run (as in your Colab)
+    # Hyperparams must match training run
     hyper = {
         'pipeline': 'gan', 'mode': 'sampling', 'transform': 'mnist',
         'lr': 0.0001, 'alpha': 0.99, 'data-bs': 128, 'ncm-bs': 128, 'grad-acc': 1,
@@ -111,7 +111,7 @@ def load_checkpoint_into_rep(rep, ckpt_path: str):
     ckpt = torch.load(ckpt_path, map_location="cpu")
     sd = ckpt.get("state_dict", ckpt)
     prefix = "model." if any(k.startswith("model.") for k in sd) else ""
-    # drop parent_heads.* to avoid size mismatch (we don't need them)
+    # drop parent_heads.* to avoid size mismatch 
     rep_sd = {
         k[len(prefix):]: v
         for k, v in sd.items()
@@ -158,13 +158,13 @@ def main():
 
     adapter = ImageEncoderAdapter(rep, image_key).eval()
     torch.save(adapter.state_dict(), args.save_adapter)
-    print(f"✅ Saved encoder adapter → {args.save_adapter}")
+    print(f"Saved encoder adapter --> {args.save_adapter}")
 
     # TorchScript
     example = torch.randn(1, 3, args.img_size, args.img_size)
     traced = torch.jit.trace(adapter, example)
     traced.save(args.save_torchscript)
-    print(f"✅ Saved TorchScript adapter → {args.save_torchscript}")
+    print(f"Saved TorchScript adapter --> {args.save_torchscript}")
 
 if __name__ == "__main__":
     main()
