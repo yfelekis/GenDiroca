@@ -142,7 +142,7 @@ A complex vision task testing the framework on a high-dimensional, non-linear sc
 
 Source: The model was trained using the auto_enc_conditional objective from the Neural Causal Abstractions framework.
 
-Reproducibility: See checkpoints/TRAINING_DETAILS.md for the exact training command, hyperparameters, and the procedure used to extract this artifact.
+Reproducibility: See checkpoints/model_training.md for the exact training command, hyperparameters, and the procedure used to extract this artifact.
 
 Backup: The original PyTorch Lightning checkpoint is preserved in the same directory for archival purposes.
 

@@ -8,7 +8,6 @@ __pycache__/
 
 # big/generated stuff (won't be committed)
 DiRoCA_ext_clean/
-checkpoints/
 data/
 datasets/
 outputs/
