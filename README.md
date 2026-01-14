@@ -8,7 +8,7 @@ This repository contains the implementation and evaluation framework for the pap
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/yfelekis/DiRoCA.git
+   git clone https://github.com/yfelekis/GenDiroca.git
    cd DiRoCA
    ```
 
