@@ -37,3 +37,4 @@ jupyter>=1.0.0
 
 # Additional utilities
 pathlib2>=2.3.0
+python-mnist>=0.7

@@ -206,7 +206,7 @@ def r2_imagewise(y, yhat):
 # ============================================================
 
 def train_cnn_model_unet(
-    model, ll_samples_tuple, epochs=5, batch_size=256, lr=1e-3,
+    model, ll_samples_tuple, epochs=50, batch_size=256, lr=1e-3, #modify epochs accordingly
     huber_beta=0.02, val_frac=0.1, weight_decay=1e-5, seed=42,
     use_amp=True, grad_clip=1.0
 ):
