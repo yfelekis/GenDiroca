@@ -6,13 +6,7 @@ This repository contains the implementation and evaluation framework for the pap
 
 ### Installation
 
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/yfelekis/GenDiroca.git
-   cd DiRoCA
-   ```
-
-2. **Install dependencies:**
+1. . **Install dependencies:**
    ```bash
    pip install -r requirements.txt
    ```
@@ -228,17 +222,4 @@ DiRoCA/
 ├── load_encoder.py                     # Helper to load Xia et al. encoder
 ├── make_folds.py                       # Cross-validation utility
 └── load_models_cell.py                 # Loading utilities for cell-based models
-```
-
-## Citation
-
-If you use this code in your research, please cite:
-
-```bibtex
-@article{diroca2026,
-  title={Distributionally Robust Causal Abstractions},
-  author={Felekis, Yorgos and Damoulas, Theodoros and Giampouras, Paris},
-  journal={arXiv preprint},
-  year={2026}
-}
 ```
