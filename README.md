@@ -289,22 +289,6 @@ DiRoCA/
 ```
 
 
-## Citation
-
-
-If you use this code in your research, please cite:
-
-
-```bibtex
-@article{diroca2026,
-  title={Distributionally Robust Causal Abstractions},
-  author={Felekis, Yorgos and Damoulas, Theodoros and Giampouras, Paris},
-  journal={arXiv preprint},
-  year={2026}
-}
-```
-
-
 
 
 
